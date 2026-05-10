@@ -1,0 +1,9 @@
+
+
+# Load bootloader symbols
+set confirm off
+    add-symbol-file C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/bootloader.elf
+set confirm on
+
+# Load application symbols
+file C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/tractor_telematics.elf

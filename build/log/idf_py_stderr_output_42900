@@ -1,0 +1,24 @@
+Command: cmake -G Ninja -B C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DCCACHE_ENABLE=False C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics
+Configuration Report               
++---------------------------------+
+|  Parser Version: 1              |
+|  Verbosity: default             |
+|  Defaults policy: sdkconfig     |
+|  Status: Finished successfully  |
+|                                 |
++---------------------------------+
+Traceback (most recent call last):
+  File "C:\esp\v6.0.1\esp-idf\components\esp_rom\gen_gdbinit.py", line 72, in <module>
+    gdbinit_lines = generate_gdbinit_rom_add_symbols(target)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\esp\v6.0.1\esp-idf\components\esp_rom\gen_gdbinit.py", line 31, in generate_gdbinit_rom_add_symbols
+    raise OSError(
+OSError: ESP_ROM_ELF_DIR environment variable is not defined. Please try to run IDF "install" and "export" scripts.
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/gdbinit.cmake:52 (message):
+  Error while generating esp_rom gdbinit
+Call Stack (most recent call first):
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:357 (__generate_gdbinit)
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:1004 (__project_info)
+  CMakeLists.txt:3 (project)
+
+

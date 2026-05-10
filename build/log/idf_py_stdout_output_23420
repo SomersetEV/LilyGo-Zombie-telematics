@@ -1,0 +1,22 @@
+Command: ninja all
+[1/13] Performing build step for 'bootloader'
+[1/1] C:\WINDOWS\system32\cmd.exe /C "cd /D "C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build\bootloader" && C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x1000 "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/bootloader.bin""
+Bootloader binary size 0x6610 bytes. 0x9f0 bytes (9%) free.
+[2/13] No install step for 'bootloader'
+[3/13] Completed 'bootloader'
+[4/13] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/vehicle_state.c.obj
+[5/13] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj
+[6/13] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/sd_logger.c.obj
+[7/13] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/can_handler.c.obj
+[8/13] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/ble_nus.c.obj
+[9/13] Linking C static library esp-idf\main\libmain.a
+[10/13] Generating esp-idf/esp_system/ld/sections.ld
+[11/13] Linking CXX executable tractor_telematics.elf
+[12/13] Generating binary image from built executable
+esptool v5.3.dev3
+Creating ESP32 image...
+Merged 3 ELF sections.
+Successfully created ESP32 image.
+Generated C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/tractor_telematics.bin
+[13/13] C:\WINDOWS\system32\cmd.exe /C "cd /D "C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build" && C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/partition_table/partition-table.bin" "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/tractor_telematics.bin""
+tractor_telematics.bin binary size 0x87d40 bytes. Smallest app partition is 0x100000 bytes. 0x782c0 bytes (47%) free.
