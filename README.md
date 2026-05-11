@@ -1,6 +1,6 @@
 # LilyGo Zombie Telematics
 
-ESP32-based CAN bus data logger for the [ZombieVerter](https://github.com/ZombieVerter) EV tractor conversion, built on the [LILYGO T-CAN485](http://www.lilygo.cc) development board.
+ESP32-based CAN bus data logger for Zombie based EV tractor conversions, built on the [LILYGO T-CAN485](http://www.lilygo.cc) development board.
 
 ## Overview
 

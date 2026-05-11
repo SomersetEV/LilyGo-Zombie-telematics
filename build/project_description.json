@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "tractor_telematics",
-    "project_version":    "40447ed",
+    "project_version":    "55e875c-dirty",
     "project_path":       "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics",
     "idf_path":           "C:/esp/v6.0.1/esp-idf",
     "build_dir":          "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build",

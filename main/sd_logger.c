@@ -93,7 +93,7 @@ static bool open_raw_file(uint32_t session_id)
         return false;
     }
 
-    fprintf(raw_file, "tick_ms,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7\n");
+    fprintf(raw_file, "Time Stamp,ID,Extended,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8\n");
     fflush(raw_file);
 
     ESP_LOGI(TAG, "Opened raw CAN file: %s", path);
@@ -104,7 +104,7 @@ static void write_raw_frame(const raw_can_log_t *f)
 {
     if (!raw_file) return;
 
-    fprintf(raw_file, "%lu,0x%03lX,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+    fprintf(raw_file, "%lu,0x%03lX,false,0,%u,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
         f->tick_ms, f->id, f->dlc,
         f->data[0], f->data[1], f->data[2], f->data[3],
         f->data[4], f->data[5], f->data[6], f->data[7]);
