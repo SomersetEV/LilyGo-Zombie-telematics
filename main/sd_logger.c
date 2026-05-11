@@ -199,3 +199,7 @@ void sd_logger_task(void *pvParameters)
         }
     }
 }
+
+bool sd_logger_trip_active(void) {
+    return trip_active;
+}
