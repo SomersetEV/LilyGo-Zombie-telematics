@@ -147,10 +147,8 @@ static void handle_list_command(void)
         char path[280];
         snprintf(path, sizeof(path), MOUNT_POINT "/%s", entry->d_name);
         struct stat st;
-        uint32_t records = 0;
-        if (stat(path, &st) == 0 && st.st_size > 0) {
-            records = (uint32_t)(st.st_size / 100);
-        }
+        if (stat(path, &st) != 0 || st.st_size == 0) continue;  // skip empty/unreadable files
+        uint32_t records = (uint32_t)(st.st_size / 100);
 
         char entry_str[32];
         snprintf(entry_str, sizeof(entry_str), "%04lu,%lu;", sid, records);
@@ -277,6 +275,11 @@ static void handle_trip_marker(log_msg_type_t type)
         ESP_LOGW(TAG, "Log queue full — trip marker dropped");
         nus_notify_str("ERR queue_full\n");
         return;
+    }
+    // Wait for sd_logger to finish closing the file and rotating the session
+    // before responding OK. The phone then immediately syncs the new session.
+    if (type == LOG_MSG_TRIP_END) {
+        sd_logger_wait_rotate(2000);
     }
     nus_notify_str("OK\n");
     ESP_LOGI(TAG, "Trip marker queued: %s",
@@ -505,9 +508,14 @@ void ble_nus_task(void *pvParameters)
     ESP_LOGI(TAG, "Command processor running");
     ble_cmd_t cmd;
     while (1) {
-        if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
             ESP_LOGI(TAG, "RX: [%s]", cmd.text);
             dispatch_command(cmd.text, cmd.len);
+        } else if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+            // Send periodic CAN activity heartbeat so the phone can show bus health
+            char buf[32];
+            snprintf(buf, sizeof(buf), "CAN %lu\n", sd_logger_can_frame_count());
+            nus_notify_str(buf);
         }
     }
 }

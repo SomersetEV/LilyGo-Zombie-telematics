@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +28,14 @@ static const char *TAG    = "SD";
 static uint32_t current_session_id = 0;
 static FILE    *raw_file           = NULL;
 
+// ── CAN activity ─────────────────────────────────────────────────────────────
+static uint32_t can_frame_count    = 0;
+
+// ── Session rotation semaphore ────────────────────────────────────────────────
+// Signalled by sd_logger_task after TRIP_END file-close + NVS rotate so that
+// ble_nus can delay its OK response until the session is available in LIST.
+static SemaphoreHandle_t rotate_sem = NULL;
+
 // ── Trip tracking ─────────────────────────────────────────────────────────────
 static bool     trip_active        = false;
 static int32_t  trip_start_ah      = 0;
@@ -41,6 +50,7 @@ static uint32_t load_and_increment_session(void)
     uint32_t id = 0;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_SESSION, &id);
+        if (id == 0) id = 1;  // sessions start at 1; 0 is reserved as "nothing synced yet"
         nvs_set_u32(nvs, NVS_KEY_SESSION, id + 1);
         nvs_commit(nvs);
         nvs_close(nvs);
@@ -85,7 +95,7 @@ static bool sd_init(void)
 static bool open_raw_file(uint32_t session_id)
 {
     char path[64];
-    snprintf(path, sizeof(path), MOUNT_POINT "/raw_%04lu.csv", session_id);
+    snprintf(path, sizeof(path), MOUNT_POINT "/session_%04lu.csv", session_id);
 
     raw_file = fopen(path, "w");
     if (!raw_file) {
@@ -103,6 +113,7 @@ static bool open_raw_file(uint32_t session_id)
 static void write_raw_frame(const raw_can_log_t *f)
 {
     if (!raw_file) return;
+    can_frame_count++;
 
     fprintf(raw_file, "%lu,0x%03lX,false,0,%u,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
         f->tick_ms, f->id, f->dlc,
@@ -130,6 +141,11 @@ static void write_raw_frame(const raw_can_log_t *f)
 
 static void handle_trip_start(void)
 {
+    // After a TRIP_END rotation raw_file is NULL — open the next session file.
+    if (!raw_file) {
+        if (!open_raw_file(current_session_id)) return;
+    }
+
     vehicle_state_t *state = vehicle_state_get();
 
     trip_start_ah      = state->latest.isa_ah;
@@ -139,7 +155,6 @@ static void handle_trip_start(void)
     trip_peak_current  = 0;
     trip_active        = true;
 
-    if (!raw_file) return;
     fprintf(raw_file, "TRIP_START,,,,,,,,,,,\n");
     fflush(raw_file);
     ESP_LOGI(TAG, "Trip started — soc=%u%%", trip_start_soc);
@@ -157,14 +172,24 @@ static void handle_trip_end(void)
     uint8_t  soc_end         = state->latest.soc;
     float    peak_current_a  = trip_peak_current / 1000.0f;
 
-    if (!raw_file) return;
+    if (raw_file) {
+        // Summary row — columns: label, duration_s, ah, kwh, soc_start, soc_end, peak_a
+        fprintf(raw_file,
+            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,\n",
+            duration_s, ah_used, kwh_used,
+            trip_start_soc, soc_end, peak_current_a);
+        fflush(raw_file);
+        fclose(raw_file);
+        raw_file = NULL;
 
-    // Summary row — columns: label, duration_s, ah, kwh, soc_start, soc_end, peak_a
-    fprintf(raw_file,
-        "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,\n",
-        duration_s, ah_used, kwh_used,
-        trip_start_soc, soc_end, peak_current_a);
-    fflush(raw_file);
+        // Rotate to a new session so the just-closed session appears in LIST.
+        // The next trip start will open the new session file lazily.
+        current_session_id = load_and_increment_session();
+    }
+
+    // Signal ble_nus that the rotate is complete so it can reply OK and
+    // the phone can immediately sync the session.
+    if (rotate_sem) xSemaphoreGive(rotate_sem);
 
     ESP_LOGI(TAG, "Trip ended — %lus, %.2fAh, %.3fkWh, SoC %u%%→%u%%, peak %.1fA",
              duration_s, ah_used, kwh_used, trip_start_soc, soc_end, peak_current_a);
@@ -173,6 +198,8 @@ static void handle_trip_end(void)
 void sd_logger_task(void *pvParameters)
 {
     QueueHandle_t log_queue = (QueueHandle_t)pvParameters;
+
+    rotate_sem = xSemaphoreCreateBinary();
 
     while (!sd_init()) {
         ESP_LOGW(TAG, "SD init failed — retrying in 5s");
@@ -202,4 +229,13 @@ void sd_logger_task(void *pvParameters)
 
 bool sd_logger_trip_active(void) {
     return trip_active;
+}
+
+uint32_t sd_logger_can_frame_count(void) {
+    return can_frame_count;
+}
+
+bool sd_logger_wait_rotate(uint32_t timeout_ms) {
+    if (!rotate_sem) return false;
+    return xSemaphoreTake(rotate_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
