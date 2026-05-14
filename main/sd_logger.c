@@ -31,6 +31,10 @@ static FILE    *raw_file           = NULL;
 // ── CAN activity ─────────────────────────────────────────────────────────────
 static uint32_t can_frame_count    = 0;
 
+// ── 1 Hz snapshot file ────────────────────────────────────────────────────────
+static FILE    *snap_file          = NULL;
+static uint32_t last_snapshot_tick = 0;
+
 // ── Session rotation semaphore ────────────────────────────────────────────────
 // Signalled by sd_logger_task after TRIP_END file-close + NVS rotate so that
 // ble_nus can delay its OK response until the session is available in LIST.
@@ -92,6 +96,24 @@ static bool sd_init(void)
     return true;
 }
 
+static bool open_snap_file(uint32_t session_id)
+{
+    char path[64];
+    snprintf(path, sizeof(path), MOUNT_POINT "/snap_%04lu.csv", session_id);
+    snap_file = fopen(path, "w");
+    if (!snap_file) {
+        ESP_LOGE(TAG, "Failed to open %s", path);
+        return false;
+    }
+    fprintf(snap_file,
+        "SNAP1,tick_ms,soc_pct,pack_v_bms_mv,pack_i_ma,"
+        "isa_kw_w,isa_as,motor_rpm,motor_temp_c10,inv_temp_c10,"
+        "bms_tmax_c10,bms_tmin_c10,cell_v_max_mv,cell_v_min_mv\n");
+    fflush(snap_file);
+    ESP_LOGI(TAG, "Opened snap file: %s", path);
+    return true;
+}
+
 static bool open_raw_file(uint32_t session_id)
 {
     char path[64];
@@ -110,10 +132,42 @@ static bool open_raw_file(uint32_t session_id)
     return true;
 }
 
+static void write_snapshot(uint32_t tick_ms)
+{
+    if (!snap_file) return;
+    const log_record_t *r = &vehicle_state_get()->latest;
+    fprintf(snap_file,
+        "%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
+        (unsigned long)tick_ms,
+        (unsigned)r->soc,
+        (unsigned)(r->pack_voltage_bms * 10u),  // 0.01V units → mV
+        (int)r->pack_current_ma,
+        (int)r->isa_kw,
+        (int)r->isa_ah,
+        (int)r->motor_rpm,
+        (int)r->motor_temp,
+        (int)r->inverter_temp,
+        (int)r->bms_temp_max,
+        (int)r->bms_temp_min,
+        (unsigned)r->cell_voltage_max,
+        (unsigned)r->cell_voltage_min);
+    static uint8_t snap_flush_ctr = 0;
+    if (++snap_flush_ctr >= 60) {    // flush once per minute
+        fflush(snap_file);
+        snap_flush_ctr = 0;
+    }
+}
+
 static void write_raw_frame(const raw_can_log_t *f)
 {
     if (!raw_file) return;
     can_frame_count++;
+
+    // Write 1 Hz snapshot whenever a new second boundary passes
+    if (f->tick_ms - last_snapshot_tick >= 1000) {
+        last_snapshot_tick = f->tick_ms;
+        write_snapshot(f->tick_ms);
+    }
 
     fprintf(raw_file, "%lu,0x%03lX,false,0,%u,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
         f->tick_ms, f->id, f->dlc,
@@ -141,9 +195,12 @@ static void write_raw_frame(const raw_can_log_t *f)
 
 static void handle_trip_start(void)
 {
-    // After a TRIP_END rotation raw_file is NULL — open the next session file.
+    // After a TRIP_END rotation both files are NULL — open the next session files.
     if (!raw_file) {
         if (!open_raw_file(current_session_id)) return;
+    }
+    if (!snap_file) {
+        open_snap_file(current_session_id);
     }
 
     vehicle_state_t *state = vehicle_state_get();
@@ -154,9 +211,14 @@ static void handle_trip_start(void)
     trip_start_tick    = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
     trip_peak_current  = 0;
     trip_active        = true;
+    last_snapshot_tick = 0;  // force a snapshot on the next frame
 
     fprintf(raw_file, "TRIP_START,,,,,,,,,,,\n");
     fflush(raw_file);
+    if (snap_file) {
+        fprintf(snap_file, "TRIP_START,,,,,,,,,,,,,\n");
+        fflush(snap_file);
+    }
     ESP_LOGI(TAG, "Trip started — soc=%u%%", trip_start_soc);
 }
 
@@ -172,6 +234,16 @@ static void handle_trip_end(void)
     uint8_t  soc_end         = state->latest.soc;
     float    peak_current_a  = trip_peak_current / 1000.0f;
 
+    if (snap_file) {
+        fprintf(snap_file,
+            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,,,,\n",
+            duration_s, ah_used, kwh_used,
+            trip_start_soc, soc_end, peak_current_a);
+        fflush(snap_file);
+        fclose(snap_file);
+        snap_file = NULL;
+    }
+
     if (raw_file) {
         // Summary row — columns: label, duration_s, ah, kwh, soc_start, soc_end, peak_a
         fprintf(raw_file,
@@ -183,7 +255,7 @@ static void handle_trip_end(void)
         raw_file = NULL;
 
         // Rotate to a new session so the just-closed session appears in LIST.
-        // The next trip start will open the new session file lazily.
+        // The next trip start will open the new session files lazily.
         current_session_id = load_and_increment_session();
     }
 
@@ -208,6 +280,7 @@ void sd_logger_task(void *pvParameters)
 
     current_session_id = load_and_increment_session();
     open_raw_file(current_session_id);
+    open_snap_file(current_session_id);
 
     log_msg_t msg;
     while (1) {

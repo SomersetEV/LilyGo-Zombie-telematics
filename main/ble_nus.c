@@ -140,7 +140,7 @@ static void handle_list_command(void)
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         uint32_t sid;
-        if (sscanf(entry->d_name, "session_%04lu.csv", &sid) != 1) continue;
+        if (sscanf(entry->d_name, "snap_%04lu.csv", &sid) != 1) continue;
         if (sid == active_session) continue;    // skip currently-open session
         if (sid <= last_synced)    continue;    // skip already-synced sessions
 
@@ -175,7 +175,7 @@ static void handle_get_command(uint32_t session_id)
      * A 1-hour session at 1Hz / ~100 bytes/row = ~360KB ≈ 15 seconds transfer time.
      */
     char path[64];
-    snprintf(path, sizeof(path), MOUNT_POINT "/session_%04lu.csv", session_id);
+    snprintf(path, sizeof(path), MOUNT_POINT "/snap_%04lu.csv", session_id);
 
     struct stat st;
     if (stat(path, &st) != 0) {
