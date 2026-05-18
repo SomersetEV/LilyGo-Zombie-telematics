@@ -227,7 +227,14 @@ void can_rx_task(void *pvParameters)
                 default: known = false; break;
             }
 
-            // Only log frames we recognise — drop unknown IDs
+            // Stream ALL frames to Speedo app — it needs full CAN bus visibility
+            if (g_app_mode == APP_MODE_SPEEDO && g_ble_live_queue != NULL) {
+                raw_can_log_t live = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc };
+                memcpy(live.data, f.data, f.dlc);
+                xQueueSendToBack(g_ble_live_queue, &live, 0);
+            }
+
+            // Only log known frames to SD card
             if (known) {
                 log_msg_t raw_msg = {
                     .type  = LOG_MSG_RAW_FRAME,
@@ -236,9 +243,6 @@ void can_rx_task(void *pvParameters)
                 memcpy(raw_msg.frame.data, f.data, f.dlc);
                 if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
                     ESP_LOGW(TAG, "Log queue full, raw frame dropped");
-                }
-                if (g_app_mode == APP_MODE_SPEEDO && g_ble_live_queue != NULL) {
-                    xQueueSendToBack(g_ble_live_queue, &raw_msg.frame, 0);
                 }
             }
         }
