@@ -76,9 +76,13 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg);
 // ── State ────────────────────────────────────────────────────────────────────
 static uint16_t      nus_tx_handle  = 0;
 static uint16_t      conn_handle    = BLE_HS_CONN_HANDLE_NONE;
-static uint16_t      negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
+static volatile uint16_t negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
 static QueueHandle_t cmd_queue      = NULL;
 static QueueHandle_t log_queue      = NULL;  // shared with CAN and SD tasks
+
+QueueHandle_t       g_ble_live_queue            = NULL;
+volatile app_mode_t g_app_mode                  = APP_MODE_DETECTING;
+static volatile uint32_t s_connect_time_ms      = 0;
 
 typedef struct {
     char     text[CMD_MAX_LEN];
@@ -151,8 +155,11 @@ static void handle_list_command(void)
         uint32_t records = (uint32_t)(st.st_size / 100);
 
         char entry_str[32];
-        snprintf(entry_str, sizeof(entry_str), "%04lu,%lu;", sid, records);
-        strncat(response, entry_str, sizeof(response) - strlen(response) - 1);
+        int entry_len = snprintf(entry_str, sizeof(entry_str), "%04lu,%lu;", sid, records);
+        if (entry_len <= 0) continue;
+        // Reserve 2 bytes for the trailing "\n\0"; skip entry if it won't fit whole
+        if (strlen(response) + (size_t)entry_len + 2 > sizeof(response)) break;
+        strncat(response, entry_str, entry_len);
     }
     closedir(dir);
     strncat(response, "\n", sizeof(response) - strlen(response) - 1);
@@ -194,7 +201,11 @@ static void handle_get_command(uint32_t session_id)
     // Send header — give Android 50ms to process before streaming begins
     char header[64];
     snprintf(header, sizeof(header), "DATA %04lu %ld\n", session_id, (long)st.st_size);
-    nus_notify_str(header);
+    if (nus_notify_str(header) != 0) {
+        ESP_LOGW(TAG, "GET %04lu: DATA header send failed, aborting", session_id);
+        fclose(f);
+        return;
+    }
     vTaskDelay(pdMS_TO_TICKS(50));
 
     uint16_t chunk_size = (negotiated_mtu > 3) ? (negotiated_mtu - 3) : DEFAULT_CHUNK_SIZE;
@@ -210,7 +221,11 @@ static void handle_get_command(uint32_t session_id)
             fclose(f);
             return;     // Phone discards incomplete session and re-requests on reconnect
         }
-        nus_notify(buf, (uint16_t)bytes_read);
+        if (nus_notify(buf, (uint16_t)bytes_read) != 0) {
+            ESP_LOGW(TAG, "GET %04lu: notify failed mid-transfer, aborting", session_id);
+            fclose(f);
+            return;
+        }
         total_sent += bytes_read;
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -252,11 +267,13 @@ static void handle_time_command(uint32_t unix_epoch)
      * Persists only in RAM — resets on next power cycle until phone reconnects.
      */
     vehicle_state_t *state = vehicle_state_get();
+    uint32_t current_tick_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
     state->latest.unix_offset = (int32_t)unix_epoch
-                              - (int32_t)(state->latest.tick_ms / 1000);
+                              - (int32_t)(current_tick_ms / 1000);
     nus_notify_str("OK\n");
-    ESP_LOGI(TAG, "TIME synced: unix=%lu offset=%ld",
-             unix_epoch, (long)state->latest.unix_offset);
+    ESP_LOGI(TAG, "TIME synced: unix=%lu tick=%lu offset=%ld",
+             unix_epoch, (unsigned long)current_tick_ms,
+             (long)state->latest.unix_offset);
 }
 
 static void handle_trip_marker(log_msg_type_t type)
@@ -296,6 +313,7 @@ static void handle_status_command(void)
 
 static void dispatch_command(const char *cmd, uint16_t len)
 {
+    g_app_mode = APP_MODE_TELEMATICS;
     uint32_t arg;
     if      (strncmp(cmd, "LIST", 4) == 0)           { handle_list_command();                    }
     else if (sscanf(cmd, "GET %lu",  &arg) == 1)     { handle_get_command(arg);                  }
@@ -387,8 +405,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
-            conn_handle    = event->connect.conn_handle;
-            negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
+            conn_handle       = event->connect.conn_handle;
+            negotiated_mtu    = DEFAULT_CHUNK_SIZE + 3;
+            g_app_mode        = APP_MODE_DETECTING;
+            s_connect_time_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
             ESP_LOGI(TAG, "Phone connected — handle=%d", conn_handle);
         } else {
             conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -397,7 +417,13 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        conn_handle       = BLE_HS_CONN_HANDLE_NONE;
+        g_app_mode        = APP_MODE_DETECTING;
+        s_connect_time_ms = 0;
+        if (g_ble_live_queue) {
+            raw_can_log_t tmp;
+            while (xQueueReceive(g_ble_live_queue, &tmp, 0) == pdTRUE) {}
+        }
         ESP_LOGI(TAG, "Disconnected — reason=%d", event->disconnect.reason);
         restart_advertising();
         break;
@@ -487,6 +513,8 @@ void ble_nus_task(void *pvParameters)
 
     cmd_queue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ble_cmd_t));
     configASSERT(cmd_queue);
+    g_ble_live_queue = xQueueCreate(128, sizeof(raw_can_log_t));
+    configASSERT(g_ble_live_queue);
 
     nimble_port_init();
 
@@ -508,14 +536,54 @@ void ble_nus_task(void *pvParameters)
     ESP_LOGI(TAG, "Command processor running");
     ble_cmd_t cmd;
     while (1) {
-        if (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        TickType_t timeout = (g_app_mode == APP_MODE_SPEEDO)
+                             ? pdMS_TO_TICKS(100)
+                             : pdMS_TO_TICKS(1000);
+        if (xQueueReceive(cmd_queue, &cmd, timeout) == pdTRUE) {
             ESP_LOGI(TAG, "RX: [%s]", cmd.text);
             dispatch_command(cmd.text, cmd.len);
         } else if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-            // Send periodic CAN activity heartbeat so the phone can show bus health
-            char buf[32];
-            snprintf(buf, sizeof(buf), "CAN %lu\n", sd_logger_can_frame_count());
-            nus_notify_str(buf);
+            if (g_app_mode == APP_MODE_DETECTING) {
+                uint32_t now_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
+                if (s_connect_time_ms > 0 && (now_ms - s_connect_time_ms) >= 3000) {
+                    g_app_mode = APP_MODE_SPEEDO;
+                    ESP_LOGI(TAG, "No command received — entering Speedo mode");
+                }
+            } else if (g_app_mode == APP_MODE_SPEEDO) {
+                // Drain live queue and stream CAN frames as GVRET CSV to Speedo app
+                raw_can_log_t frame;
+                char buf[512];
+                int buf_len = 0;
+                bool disconnected = false;
+                while (!disconnected &&
+                       xQueueReceive(g_ble_live_queue, &frame, 0) == pdTRUE) {
+                    char line[64];
+                    int line_len = snprintf(line, sizeof(line),
+                        "%lu,%lu,0,0,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                        (unsigned long)frame.tick_ms,
+                        (unsigned long)frame.id,
+                        frame.dlc,
+                        frame.data[0], frame.data[1], frame.data[2], frame.data[3],
+                        frame.data[4], frame.data[5], frame.data[6], frame.data[7]);
+                    if (line_len <= 0 || line_len >= (int)sizeof(line)) continue;
+                    if (buf_len + line_len > (int)sizeof(buf)) {
+                        if (nus_notify(buf, (uint16_t)buf_len) != 0) {
+                            disconnected = true;
+                            break;
+                        }
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                        buf_len = 0;
+                    }
+                    memcpy(buf + buf_len, line, line_len);
+                    buf_len += line_len;
+                }
+                if (!disconnected && buf_len > 0) nus_notify(buf, (uint16_t)buf_len);
+            } else {
+                // Telematics mode: periodic CAN activity heartbeat
+                char buf[32];
+                snprintf(buf, sizeof(buf), "CAN %lu\n", sd_logger_can_frame_count());
+                nus_notify_str(buf);
+            }
         }
     }
 }

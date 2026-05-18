@@ -25,11 +25,12 @@ static const char *TAG    = "SD";
 #define SD_CLK   GPIO_NUM_14
 #define SD_CS    GPIO_NUM_13
 
+static bool     s_spi_bus_ok       = false;
 static uint32_t current_session_id = 0;
 static FILE    *raw_file           = NULL;
 
 // ── CAN activity ─────────────────────────────────────────────────────────────
-static uint32_t can_frame_count    = 0;
+static volatile uint32_t can_frame_count = 0;  // read from Core 0, written from Core 1
 
 // ── 1 Hz snapshot file ────────────────────────────────────────────────────────
 static FILE    *snap_file          = NULL;
@@ -41,7 +42,7 @@ static uint32_t last_snapshot_tick = 0;
 static SemaphoreHandle_t rotate_sem = NULL;
 
 // ── Trip tracking ─────────────────────────────────────────────────────────────
-static bool     trip_active        = false;
+static volatile bool trip_active   = false;    // read from Core 0, written from Core 1
 static int32_t  trip_start_ah      = 0;
 static int32_t  trip_start_kwh     = 0;
 static uint8_t  trip_start_soc     = 0;
@@ -71,18 +72,25 @@ static bool sd_init(void)
     };
 
     sdmmc_card_t *card;
-    sdmmc_host_t host         = SDSPI_HOST_DEFAULT();
-    spi_bus_config_t bus_cfg  = {
-        .mosi_io_num   = SD_MOSI,
-        .miso_io_num   = SD_MISO,
-        .sclk_io_num   = SD_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-    };
+    sdmmc_host_t host             = SDSPI_HOST_DEFAULT();
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_cfg.gpio_cs = SD_CS;
 
-    ESP_ERROR_CHECK(spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO));
+    if (!s_spi_bus_ok) {
+        spi_bus_config_t bus_cfg = {
+            .mosi_io_num   = SD_MOSI,
+            .miso_io_num   = SD_MISO,
+            .sclk_io_num   = SD_CLK,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+        };
+        esp_err_t r = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(r));
+            return false;
+        }
+        s_spi_bus_ok = true;
+    }
 
     esp_err_t ret = esp_vfs_fat_sdspi_mount(MOUNT_POINT, &host, &slot_cfg, &mount_cfg, &card);
     if (ret != ESP_OK) {
@@ -137,7 +145,7 @@ static void write_snapshot(uint32_t tick_ms)
     if (!snap_file) return;
     const log_record_t *r = &vehicle_state_get()->latest;
     fprintf(snap_file,
-        "%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
+        "SNAP1,%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
         (unsigned long)tick_ms,
         (unsigned)r->soc,
         (unsigned)(r->pack_voltage_bms * 10u),  // 0.01V units → mV
@@ -170,7 +178,7 @@ static void write_raw_frame(const raw_can_log_t *f)
     }
 
     fprintf(raw_file, "%lu,0x%03lX,false,0,%u,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
-        f->tick_ms, f->id, f->dlc,
+        (unsigned long)f->tick_ms, (unsigned long)f->id, f->dlc,
         f->data[0], f->data[1], f->data[2], f->data[3],
         f->data[4], f->data[5], f->data[6], f->data[7]);
 
@@ -213,7 +221,7 @@ static void handle_trip_start(void)
     trip_active        = true;
     last_snapshot_tick = 0;  // force a snapshot on the next frame
 
-    fprintf(raw_file, "TRIP_START,,,,,,,,,,,\n");
+    fprintf(raw_file, "TRIP_START,,,,,,,,,,,,\n");
     fflush(raw_file);
     if (snap_file) {
         fprintf(snap_file, "TRIP_START,,,,,,,,,,,,,\n");
@@ -224,6 +232,11 @@ static void handle_trip_start(void)
 
 static void handle_trip_end(void)
 {
+    if (!trip_active) {
+        ESP_LOGW(TAG, "TRIP_END received with no active trip — ignored");
+        if (rotate_sem) xSemaphoreGive(rotate_sem);
+        return;
+    }
     trip_active = false;
 
     vehicle_state_t *state   = vehicle_state_get();
@@ -247,7 +260,7 @@ static void handle_trip_end(void)
     if (raw_file) {
         // Summary row — columns: label, duration_s, ah, kwh, soc_start, soc_end, peak_a
         fprintf(raw_file,
-            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,\n",
+            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,,,\n",
             duration_s, ah_used, kwh_used,
             trip_start_soc, soc_end, peak_current_a);
         fflush(raw_file);

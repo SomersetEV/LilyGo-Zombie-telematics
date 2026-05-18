@@ -1,5 +1,6 @@
 #include "can_handler.h"
 #include "vehicle_state.h"
+#include "ble_nus.h"
 #include "esp_twai_onchip.h"
 #include "esp_twai.h"
 #include "esp_log.h"
@@ -235,6 +236,9 @@ void can_rx_task(void *pvParameters)
                 memcpy(raw_msg.frame.data, f.data, f.dlc);
                 if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
                     ESP_LOGW(TAG, "Log queue full, raw frame dropped");
+                }
+                if (g_app_mode == APP_MODE_SPEEDO && g_ble_live_queue != NULL) {
+                    xQueueSendToBack(g_ble_live_queue, &raw_msg.frame, 0);
                 }
             }
         }
