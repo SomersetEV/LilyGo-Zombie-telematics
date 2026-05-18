@@ -559,7 +559,7 @@ void ble_nus_task(void *pvParameters)
                        xQueueReceive(g_ble_live_queue, &frame, 0) == pdTRUE) {
                     char line[64];
                     int line_len = snprintf(line, sizeof(line),
-                        "%lu,%lu,0,0,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                        "%lu,%lu,0,0,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
                         (unsigned long)frame.tick_ms,
                         (unsigned long)frame.id,
                         frame.dlc,
