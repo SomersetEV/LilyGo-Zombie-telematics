@@ -29,9 +29,6 @@ static bool     s_spi_bus_ok       = false;
 static uint32_t current_session_id = 0;
 static FILE    *raw_file           = NULL;
 
-// ── CAN activity ─────────────────────────────────────────────────────────────
-static volatile uint32_t can_frame_count = 0;  // read from Core 0, written from Core 1
-
 // ── 1 Hz snapshot file ────────────────────────────────────────────────────────
 static FILE    *snap_file          = NULL;
 static uint32_t last_snapshot_tick = 0;
@@ -169,7 +166,6 @@ static void write_snapshot(uint32_t tick_ms)
 static void write_raw_frame(const raw_can_log_t *f)
 {
     if (!raw_file) return;
-    can_frame_count++;
 
     // Write 1 Hz snapshot whenever a new second boundary passes
     if (f->tick_ms - last_snapshot_tick >= 1000) {
@@ -315,10 +311,6 @@ void sd_logger_task(void *pvParameters)
 
 bool sd_logger_trip_active(void) {
     return trip_active;
-}
-
-uint32_t sd_logger_can_frame_count(void) {
-    return can_frame_count;
 }
 
 bool sd_logger_wait_rotate(uint32_t timeout_ms) {

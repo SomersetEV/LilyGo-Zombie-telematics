@@ -19,6 +19,7 @@
 #include "ble_nus.h"
 #include "vehicle_state.h"
 #include "sd_logger.h"
+#include "can_handler.h"
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -581,7 +582,7 @@ void ble_nus_task(void *pvParameters)
             } else {
                 // Telematics mode: periodic CAN activity heartbeat
                 char buf[32];
-                snprintf(buf, sizeof(buf), "CAN %lu\n", sd_logger_can_frame_count());
+                snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
                 nus_notify_str(buf);
             }
         }

@@ -50,6 +50,12 @@ static twai_node_handle_t s_node        = NULL;
 static QueueHandle_t      s_rx_queue    = NULL;
 static QueueHandle_t      s_log_queue   = NULL;  // shared with sd_logger
 
+static volatile uint32_t  s_can_frame_count = 0;
+
+uint32_t can_handler_frame_count(void) {
+    return s_can_frame_count;
+}
+
 // ── ISR callback — called when a CAN frame arrives ───────────────────────────
 static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
                                       const twai_rx_done_event_data_t *edata,
@@ -205,10 +211,10 @@ void can_rx_task(void *pvParameters)
 
     while (1) {
         if (xQueueReceive(s_rx_queue, &f, portMAX_DELAY) == pdTRUE) {
+            s_can_frame_count++;
             uint32_t tick_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
 
-            // Parse into vehicle state and flag known IDs for raw logging
-            bool known = true;
+            // Decode known IDs into vehicle state
             switch (f.id) {
                 case CAN_ID_BMS_SOC:        parse_bms_soc(&f, state);                       break;
                 case CAN_ID_BMS_PACK:       parse_bms_pack(&f, state);                      break;
@@ -223,8 +229,7 @@ void can_rx_task(void *pvParameters)
                 case CAN_ID_MG_LV:          parse_mg_lv(&f, state);                         break;
                 case CAN_ID_MG_PLUG:        parse_mg_plug(&f, state);                       break;
                 case CAN_ID_MG_TEMP:        parse_mg_temp(&f, state);                       break;
-                // TODO: ZombieVerter IDs to be confirmed
-                default: known = false; break;
+                default: break;
             }
 
             // Stream ALL frames to Speedo app — it needs full CAN bus visibility
@@ -234,16 +239,14 @@ void can_rx_task(void *pvParameters)
                 xQueueSendToBack(g_ble_live_queue, &live, 0);
             }
 
-            // Only log known frames to SD card
-            if (known) {
-                log_msg_t raw_msg = {
-                    .type  = LOG_MSG_RAW_FRAME,
-                    .frame = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc },
-                };
-                memcpy(raw_msg.frame.data, f.data, f.dlc);
-                if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
-                    ESP_LOGW(TAG, "Log queue full, raw frame dropped");
-                }
+            // Log ALL frames to SD card (including unknown IDs)
+            log_msg_t raw_msg = {
+                .type  = LOG_MSG_RAW_FRAME,
+                .frame = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc },
+            };
+            memcpy(raw_msg.frame.data, f.data, f.dlc);
+            if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "Log queue full, frame dropped");
             }
         }
     }
