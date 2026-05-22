@@ -227,8 +227,6 @@ void can_rx_task(void *pvParameters)
                 default: break;
             }
 
-            s_frame_count++;
-
             // Stream ALL frames to Speedo app — it needs full CAN bus visibility
             if (g_app_mode == APP_MODE_SPEEDO && g_ble_live_queue != NULL) {
                 raw_can_log_t live = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc };

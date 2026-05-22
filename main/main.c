@@ -48,7 +48,7 @@ void app_main(void)
 
     // Start tasks — CAN and SD writer pinned to Core 1, BLE on Core 0
     xTaskCreatePinnedToCore(can_rx_task,    "can_rx",    4096, log_queue, 5, NULL, 1);
-    xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 4096, log_queue, 3, NULL, 1);
+    xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 8192, log_queue, 3, NULL, 1);
     xTaskCreatePinnedToCore(ble_nus_task,   "ble_nus",   8192, log_queue, 4, NULL, 0);
 
     ESP_LOGI(TAG, "All tasks started");
