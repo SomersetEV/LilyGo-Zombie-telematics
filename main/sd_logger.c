@@ -45,6 +45,10 @@ static int32_t  trip_start_kwh     = 0;
 static uint8_t  trip_start_soc     = 0;
 static uint32_t trip_start_tick    = 0;
 static int32_t  trip_peak_current  = 0;   // peak absolute mA seen during trip
+static int16_t  trip_peak_rpm      = 0;   // peak motor RPM
+static int16_t  trip_peak_motor_c  = 0;   // peak motor temp, °C x10
+static int16_t  trip_peak_inv_c    = 0;   // peak inverter temp, °C x10
+static int16_t  trip_peak_bms_c    = 0;   // peak BMS temp, °C x10
 
 static uint32_t load_and_increment_session(void)
 {
@@ -141,6 +145,14 @@ static void write_snapshot(uint32_t tick_ms)
 {
     if (!snap_file) return;
     const log_record_t *r = &vehicle_state_get()->latest;
+
+    if (trip_active) {
+        if (r->motor_rpm        > trip_peak_rpm)     trip_peak_rpm     = r->motor_rpm;
+        if (r->motor_temp       > trip_peak_motor_c) trip_peak_motor_c = r->motor_temp;
+        if (r->inverter_temp    > trip_peak_inv_c)   trip_peak_inv_c   = r->inverter_temp;
+        if (r->bms_temp_max     > trip_peak_bms_c)   trip_peak_bms_c   = r->bms_temp_max;
+    }
+
     fprintf(snap_file,
         "SNAP1,%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
         (unsigned long)tick_ms,
@@ -214,6 +226,10 @@ static void handle_trip_start(void)
     trip_start_soc     = state->latest.soc;
     trip_start_tick    = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
     trip_peak_current  = 0;
+    trip_peak_rpm      = 0;
+    trip_peak_motor_c  = 0;
+    trip_peak_inv_c    = 0;
+    trip_peak_bms_c    = 0;
     trip_active        = true;
     last_snapshot_tick = 0;  // force a snapshot on the next frame
 
@@ -243,11 +259,22 @@ static void handle_trip_end(void)
     uint8_t  soc_end         = state->latest.soc;
     float    peak_current_a  = trip_peak_current / 1000.0f;
 
+    // Compute absolute start timestamp if the phone has synced time this session
+    int32_t  unix_offset = state->latest.unix_offset;
+    uint32_t start_unix  = (unix_offset != 0)
+        ? (uint32_t)((int32_t)(trip_start_tick / 1000) + unix_offset)
+        : 0;
+
     if (snap_file) {
+        // Columns 7-11 carry the new summary fields; 12-13 kept empty for the
+        // 14-column alignment expected by the phone CSV parser.
         fprintf(snap_file,
-            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,,,,,,,\n",
-            duration_s, ah_used, kwh_used,
-            trip_start_soc, soc_end, peak_current_a);
+            "TRIP_END,%lu,%.2f,%.3f,%u,%u,%.1f,%lu,%d,%d,%d,%d,,\n",
+            (unsigned long)duration_s, ah_used, kwh_used,
+            trip_start_soc, soc_end, peak_current_a,
+            (unsigned long)start_unix,
+            (int)trip_peak_rpm, (int)trip_peak_motor_c,
+            (int)trip_peak_inv_c, (int)trip_peak_bms_c);
         fflush(snap_file);
         fclose(snap_file);
         snap_file = NULL;

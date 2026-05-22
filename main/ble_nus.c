@@ -312,17 +312,85 @@ static void handle_status_command(void)
     nus_notify_str(buf);
 }
 
+static void handle_summary_command(uint32_t session_id)
+{
+    /*
+     * Read the snap_XXXX.csv file and find the TRIP_END summary row.
+     * Parse its fields and emit a single compact JOB line to the phone.
+     *
+     * TRIP_END row format (written by sd_logger):
+     *   TRIP_END,<duration_s>,<ah>,<kwh>,<soc_start>,<soc_end>,<peak_a>,
+     *            <start_unix>,<peak_rpm>,<peak_motor_c10>,<peak_inv_c10>,<peak_bms_c10>,,
+     *
+     * JOB response format:
+     *   JOB <id>,<start_unix>,<duration_s>,<ah>,<kwh>,<soc_start>,<soc_end>,
+     *       <peak_a>,<peak_rpm>,<peak_motor_c>,<peak_inv_c>,<peak_bms_c>\n
+     */
+    char path[64];
+    snprintf(path, sizeof(path), MOUNT_POINT "/snap_%04lu.csv", session_id);
+
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        char err[40];
+        snprintf(err, sizeof(err), "ERR not_found %04lu\n", session_id);
+        nus_notify_str(err);
+        return;
+    }
+
+    // Scan the whole file — keep the last TRIP_END line found
+    char line[256];
+    char trip_end_line[256] = {0};
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "TRIP_END", 8) == 0) {
+            strncpy(trip_end_line, line, sizeof(trip_end_line) - 1);
+        }
+    }
+    fclose(f);
+
+    if (trip_end_line[0] == '\0') {
+        char err[40];
+        snprintf(err, sizeof(err), "ERR no_trip %04lu\n", session_id);
+        nus_notify_str(err);
+        return;
+    }
+
+    // Parse TRIP_END fields (gracefully handle older files missing the new columns)
+    unsigned long duration_s = 0, start_unix = 0;
+    float   ah = 0.0f, kwh = 0.0f, peak_a = 0.0f;
+    unsigned soc_start = 0, soc_end = 0;
+    int peak_rpm = 0, peak_motor_c10 = 0, peak_inv_c10 = 0, peak_bms_c10 = 0;
+
+    int n = sscanf(trip_end_line,
+        "TRIP_END,%lu,%f,%f,%u,%u,%f,%lu,%d,%d,%d,%d",
+        &duration_s, &ah, &kwh, &soc_start, &soc_end, &peak_a,
+        &start_unix, &peak_rpm, &peak_motor_c10, &peak_inv_c10, &peak_bms_c10);
+    (void)n;  // fields 8-11 silently default to 0 if absent (old firmware files)
+
+    char job_line[192];
+    snprintf(job_line, sizeof(job_line),
+        "JOB %lu,%lu,%lu,%.2f,%.3f,%u,%u,%.1f,%d,%.1f,%.1f,%.1f\n",
+        (unsigned long)session_id, start_unix, duration_s,
+        ah, kwh, soc_start, soc_end, peak_a,
+        peak_rpm,
+        peak_motor_c10 / 10.0f,
+        peak_inv_c10   / 10.0f,
+        peak_bms_c10   / 10.0f);
+    nus_notify_str(job_line);
+    ESP_LOGI(TAG, "SUMMARY %04lu: %s", session_id, job_line);
+}
+
 static void dispatch_command(const char *cmd, uint16_t len)
 {
     g_app_mode = APP_MODE_TELEMATICS;
     uint32_t arg;
-    if      (strncmp(cmd, "LIST", 4) == 0)           { handle_list_command();                    }
-    else if (sscanf(cmd, "GET %lu",  &arg) == 1)     { handle_get_command(arg);                  }
-    else if (sscanf(cmd, "DONE %lu", &arg) == 1)     { handle_done_command(arg);                 }
-    else if (sscanf(cmd, "TIME %lu", &arg) == 1)     { handle_time_command(arg);                 }
-    else if (strncmp(cmd, "TRIP_START", 10) == 0)    { handle_trip_marker(LOG_MSG_TRIP_START);   }
-    else if (strncmp(cmd, "TRIP_END",   8) == 0)     { handle_trip_marker(LOG_MSG_TRIP_END);     }
-    else if (strncmp(cmd, "STATUS",     6) == 0)     { handle_status_command();                  }
+    if      (strncmp(cmd, "LIST", 4) == 0)              { handle_list_command();                    }
+    else if (sscanf(cmd, "SUMMARY %lu", &arg) == 1)    { handle_summary_command(arg);              }
+    else if (sscanf(cmd, "GET %lu",     &arg) == 1)    { handle_get_command(arg);                  }
+    else if (sscanf(cmd, "DONE %lu",    &arg) == 1)    { handle_done_command(arg);                 }
+    else if (sscanf(cmd, "TIME %lu",    &arg) == 1)    { handle_time_command(arg);                 }
+    else if (strncmp(cmd, "TRIP_START", 10) == 0)      { handle_trip_marker(LOG_MSG_TRIP_START);   }
+    else if (strncmp(cmd, "TRIP_END",   8) == 0)       { handle_trip_marker(LOG_MSG_TRIP_END);     }
+    else if (strncmp(cmd, "STATUS",     6) == 0)       { handle_status_command();                  }
     else {
         ESP_LOGW(TAG, "Unknown cmd: %.*s", len, cmd);
         nus_notify_str("ERR unknown_cmd\n");
