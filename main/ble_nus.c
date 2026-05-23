@@ -81,10 +81,6 @@ static volatile uint16_t negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
 static QueueHandle_t cmd_queue      = NULL;
 static QueueHandle_t log_queue      = NULL;  // shared with CAN and SD tasks
 
-QueueHandle_t       g_ble_live_queue            = NULL;
-volatile app_mode_t g_app_mode                  = APP_MODE_DETECTING;
-static volatile uint32_t s_connect_time_ms      = 0;
-
 typedef struct {
     char     text[CMD_MAX_LEN];
     uint16_t len;
@@ -381,7 +377,6 @@ static void handle_summary_command(uint32_t session_id)
 
 static void dispatch_command(const char *cmd, uint16_t len)
 {
-    g_app_mode = APP_MODE_TELEMATICS;
     uint32_t arg;
     if      (strncmp(cmd, "LIST", 4) == 0)              { handle_list_command();                    }
     else if (sscanf(cmd, "SUMMARY %lu", &arg) == 1)    { handle_summary_command(arg);              }
@@ -476,8 +471,6 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             conn_handle       = event->connect.conn_handle;
             negotiated_mtu    = DEFAULT_CHUNK_SIZE + 3;
-            g_app_mode        = APP_MODE_DETECTING;
-            s_connect_time_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
             ESP_LOGI(TAG, "Phone connected — handle=%d", conn_handle);
         } else {
             conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -486,13 +479,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        conn_handle       = BLE_HS_CONN_HANDLE_NONE;
-        g_app_mode        = APP_MODE_DETECTING;
-        s_connect_time_ms = 0;
-        if (g_ble_live_queue) {
-            raw_can_log_t tmp;
-            while (xQueueReceive(g_ble_live_queue, &tmp, 0) == pdTRUE) {}
-        }
+        conn_handle = BLE_HS_CONN_HANDLE_NONE;
         ESP_LOGI(TAG, "Disconnected — reason=%d", event->disconnect.reason);
         restart_advertising();
         break;
@@ -582,8 +569,6 @@ void ble_nus_task(void *pvParameters)
 
     cmd_queue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ble_cmd_t));
     configASSERT(cmd_queue);
-    g_ble_live_queue = xQueueCreate(128, sizeof(raw_can_log_t));
-    configASSERT(g_ble_live_queue);
 
     nimble_port_init();
 
@@ -605,54 +590,13 @@ void ble_nus_task(void *pvParameters)
     ESP_LOGI(TAG, "Command processor running");
     ble_cmd_t cmd;
     while (1) {
-        TickType_t timeout = (g_app_mode == APP_MODE_SPEEDO)
-                             ? pdMS_TO_TICKS(100)
-                             : pdMS_TO_TICKS(1000);
-        if (xQueueReceive(cmd_queue, &cmd, timeout) == pdTRUE) {
+        if (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
             ESP_LOGI(TAG, "RX: [%s]", cmd.text);
             dispatch_command(cmd.text, cmd.len);
         } else if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-            if (g_app_mode == APP_MODE_DETECTING) {
-                uint32_t now_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
-                if (s_connect_time_ms > 0 && (now_ms - s_connect_time_ms) >= 3000) {
-                    g_app_mode = APP_MODE_SPEEDO;
-                    ESP_LOGI(TAG, "No command received — entering Speedo mode");
-                }
-            } else if (g_app_mode == APP_MODE_SPEEDO) {
-                // Drain live queue and stream CAN frames as GVRET CSV to Speedo app
-                raw_can_log_t frame;
-                char buf[512];
-                int buf_len = 0;
-                bool disconnected = false;
-                while (!disconnected &&
-                       xQueueReceive(g_ble_live_queue, &frame, 0) == pdTRUE) {
-                    char line[64];
-                    int line_len = snprintf(line, sizeof(line),
-                        "%lu,%lu,0,0,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
-                        (unsigned long)frame.tick_ms,
-                        (unsigned long)frame.id,
-                        frame.dlc,
-                        frame.data[0], frame.data[1], frame.data[2], frame.data[3],
-                        frame.data[4], frame.data[5], frame.data[6], frame.data[7]);
-                    if (line_len <= 0 || line_len >= (int)sizeof(line)) continue;
-                    if (buf_len + line_len > (int)sizeof(buf)) {
-                        if (nus_notify(buf, (uint16_t)buf_len) != 0) {
-                            disconnected = true;
-                            break;
-                        }
-                        vTaskDelay(pdMS_TO_TICKS(20));
-                        buf_len = 0;
-                    }
-                    memcpy(buf + buf_len, line, line_len);
-                    buf_len += line_len;
-                }
-                if (!disconnected && buf_len > 0) nus_notify(buf, (uint16_t)buf_len);
-            } else {
-                // Telematics mode: periodic CAN activity heartbeat
-                char buf[32];
-                snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
-                nus_notify_str(buf);
-            }
+            char buf[32];
+            snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
+            nus_notify_str(buf);
         }
     }
 }

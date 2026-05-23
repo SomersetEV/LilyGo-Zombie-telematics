@@ -1,6 +1,5 @@
 #include "can_handler.h"
 #include "vehicle_state.h"
-#include "ble_nus.h"
 #include "esp_twai_onchip.h"
 #include "esp_twai.h"
 #include "esp_log.h"
@@ -225,13 +224,6 @@ void can_rx_task(void *pvParameters)
                 case CAN_ID_MG_PLUG:        parse_mg_plug(&f, state);                       break;
                 case CAN_ID_MG_TEMP:        parse_mg_temp(&f, state);                       break;
                 default: break;
-            }
-
-            // Stream ALL frames to Speedo app — it needs full CAN bus visibility
-            if (g_app_mode == APP_MODE_SPEEDO && g_ble_live_queue != NULL) {
-                raw_can_log_t live = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc };
-                memcpy(live.data, f.data, f.dlc);
-                xQueueSendToBack(g_ble_live_queue, &live, 0);
             }
 
             // Log ALL frames to SD card (including unknown IDs)
