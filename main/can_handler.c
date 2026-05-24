@@ -49,6 +49,7 @@ static twai_node_handle_t s_node        = NULL;
 static QueueHandle_t      s_rx_queue    = NULL;
 static QueueHandle_t      s_log_queue   = NULL;  // shared with sd_logger
 static volatile uint32_t  s_frame_count = 0;
+static volatile uint32_t  s_drop_count  = 0;
 
 // ── ISR callback — called when a CAN frame arrives ───────────────────────────
 static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
@@ -202,11 +203,19 @@ void can_rx_task(void *pvParameters)
     ESP_LOGI(TAG, "TWAI started, 500kbps listen-only");
 
     raw_frame_t f;
+    uint32_t last_drop_log_ms = 0;
 
     while (1) {
         if (xQueueReceive(s_rx_queue, &f, portMAX_DELAY) == pdTRUE) {
             s_frame_count++;
             uint32_t tick_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
+
+            // Report accumulated drop count at most once per second
+            if (s_drop_count > 0 && (tick_ms - last_drop_log_ms) >= 1000) {
+                ESP_LOGW(TAG, "Log queue dropped %lu frames", (unsigned long)s_drop_count);
+                s_drop_count     = 0;
+                last_drop_log_ms = tick_ms;
+            }
 
             // Decode known IDs into vehicle state
             switch (f.id) {
@@ -233,7 +242,7 @@ void can_rx_task(void *pvParameters)
             };
             memcpy(raw_msg.frame.data, f.data, f.dlc);
             if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
-                ESP_LOGW(TAG, "Log queue full, frame dropped");
+                s_drop_count++;
             }
         }
     }

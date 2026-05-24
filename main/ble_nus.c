@@ -19,7 +19,6 @@
 #include "ble_nus.h"
 #include "vehicle_state.h"
 #include "sd_logger.h"
-#include "can_handler.h"
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -78,6 +77,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg);
 static uint16_t      nus_tx_handle  = 0;
 static uint16_t      conn_handle    = BLE_HS_CONN_HANDLE_NONE;
 static volatile uint16_t negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
+static volatile bool s_cccd_subscribed  = false;
 static QueueHandle_t cmd_queue      = NULL;
 static QueueHandle_t log_queue      = NULL;  // shared with CAN and SD tasks
 
@@ -90,7 +90,7 @@ typedef struct {
 
 static int nus_notify(const void *data, uint16_t len)
 {
-    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) return -1;
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_cccd_subscribed) return -1;
 
     struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
     if (!om) {
@@ -211,16 +211,24 @@ static void handle_get_command(uint32_t session_id)
     uint8_t  buf[MAX_CHUNK_SIZE];
     size_t   bytes_read;
     uint32_t total_sent = 0;
+    char end_marker[32];
+    snprintf(end_marker, sizeof(end_marker), "END %04lu\n", session_id);
 
     while ((bytes_read = fread(buf, 1, chunk_size, f)) > 0) {
         if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
             ESP_LOGW(TAG, "Disconnected mid-transfer, aborting GET %04lu", session_id);
             fclose(f);
-            return;     // Phone discards incomplete session and re-requests on reconnect
+            return;
         }
-        if (nus_notify(buf, (uint16_t)bytes_read) != 0) {
-            ESP_LOGW(TAG, "GET %04lu: notify failed mid-transfer, aborting", session_id);
+        bool ok = false;
+        for (int retry = 0; retry < 3 && !ok; retry++) {
+            if (retry > 0) vTaskDelay(pdMS_TO_TICKS(50));
+            ok = (nus_notify(buf, (uint16_t)bytes_read) == 0);
+        }
+        if (!ok) {
+            ESP_LOGW(TAG, "GET %04lu: notify failed after retries, aborting", session_id);
             fclose(f);
+            nus_notify_str(end_marker);  // phone checks size vs declared; can retry next connect
             return;
         }
         total_sent += bytes_read;
@@ -228,8 +236,6 @@ static void handle_get_command(uint32_t session_id)
     }
     fclose(f);
 
-    char end_marker[32];
-    snprintf(end_marker, sizeof(end_marker), "END %04lu\n", session_id);
     nus_notify_str(end_marker);
 
     ESP_LOGI(TAG, "GET %04lu complete — %lu bytes sent", session_id, total_sent);
@@ -479,7 +485,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        conn_handle       = BLE_HS_CONN_HANDLE_NONE;
+        s_cccd_subscribed = false;
         ESP_LOGI(TAG, "Disconnected — reason=%d", event->disconnect.reason);
         restart_advertising();
         break;
@@ -494,6 +501,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
+        s_cccd_subscribed = event->subscribe.cur_notify;
         ESP_LOGI(TAG, "TX notifications %s",
                  event->subscribe.cur_notify ? "enabled" : "disabled");
         break;
@@ -590,13 +598,9 @@ void ble_nus_task(void *pvParameters)
     ESP_LOGI(TAG, "Command processor running");
     ble_cmd_t cmd;
     while (1) {
-        if (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "RX: [%s]", cmd.text);
             dispatch_command(cmd.text, cmd.len);
-        } else if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
-            nus_notify_str(buf);
         }
     }
 }
