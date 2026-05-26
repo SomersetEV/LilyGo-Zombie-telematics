@@ -47,9 +47,7 @@ typedef struct {
 
 static twai_node_handle_t s_node        = NULL;
 static QueueHandle_t      s_rx_queue    = NULL;
-static QueueHandle_t      s_log_queue   = NULL;  // shared with sd_logger
 static volatile uint32_t  s_frame_count = 0;
-static volatile uint32_t  s_drop_count  = 0;
 
 // ── ISR callback — called when a CAN frame arrives ───────────────────────────
 static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
@@ -173,11 +171,13 @@ static void parse_mg_temp(const raw_frame_t *f, vehicle_state_t *state)
 }
 
 // ── Task ──────────────────────────────────────────────────────────────────────
+// Decodes CAN frames into vehicle_state only. No SD logging — summaries are
+// compiled by sd_logger_task at trip end from the accumulated vehicle_state.
 
 void can_rx_task(void *pvParameters)
 {
-    s_log_queue             = (QueueHandle_t)pvParameters;
-    vehicle_state_t *state  = vehicle_state_get();
+    (void)pvParameters;
+    vehicle_state_t *state = vehicle_state_get();
 
     // Deep ISR queue — ISA shunt alone can burst 5 IDs at up to 100Hz
     s_rx_queue = xQueueCreate(256, sizeof(raw_frame_t));
@@ -203,21 +203,9 @@ void can_rx_task(void *pvParameters)
     ESP_LOGI(TAG, "TWAI started, 500kbps listen-only");
 
     raw_frame_t f;
-    uint32_t last_drop_log_ms = 0;
-
     while (1) {
         if (xQueueReceive(s_rx_queue, &f, portMAX_DELAY) == pdTRUE) {
             s_frame_count++;
-            uint32_t tick_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
-
-            // Report accumulated drop count at most once per second
-            if (s_drop_count > 0 && (tick_ms - last_drop_log_ms) >= 1000) {
-                ESP_LOGW(TAG, "Log queue dropped %lu frames", (unsigned long)s_drop_count);
-                s_drop_count     = 0;
-                last_drop_log_ms = tick_ms;
-            }
-
-            // Decode known IDs into vehicle state
             switch (f.id) {
                 case CAN_ID_BMS_SOC:        parse_bms_soc(&f, state);                       break;
                 case CAN_ID_BMS_PACK:       parse_bms_pack(&f, state);                      break;
@@ -233,16 +221,6 @@ void can_rx_task(void *pvParameters)
                 case CAN_ID_MG_PLUG:        parse_mg_plug(&f, state);                       break;
                 case CAN_ID_MG_TEMP:        parse_mg_temp(&f, state);                       break;
                 default: break;
-            }
-
-            // Log ALL frames to SD card (including unknown IDs)
-            log_msg_t raw_msg = {
-                .type  = LOG_MSG_RAW_FRAME,
-                .frame = { .tick_ms = tick_ms, .id = f.id, .dlc = f.dlc },
-            };
-            memcpy(raw_msg.frame.data, f.data, f.dlc);
-            if (xQueueSend(s_log_queue, &raw_msg, 0) != pdTRUE) {
-                s_drop_count++;
             }
         }
     }

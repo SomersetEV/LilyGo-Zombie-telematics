@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\benay\\\\Documents\\\\GitHub\\\\LilyGo Zombie telematics\\\\\" -Directory | Select-Object Name)"
+    ]
+  }
+}

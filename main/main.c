@@ -4,13 +4,13 @@
  * Framework: ESP-IDF
  *
  * Architecture:
- *   Core 1: CAN RX task, log writer task
- *   Core 0: BLE NUS task
+ *   Core 1: CAN RX task — ISR-driven, decodes frames into vehicle_state only
+ *   Core 0: SD logger task (trip summary on TRIP_END) + BLE NUS task
  *
  * Storage:
- *   SD card (SPI/FAT32) — CSV, primary archive
- *   BLE NUS             — binary sync to phone app
- *   NVS                 — session counter, last synced session, config
+ *   SD card (SPI/FAT32) — one snap_XXXX.csv summary row per trip
+ *   BLE NUS             — session sync to phone app (LIST/GET/DONE/SUMMARY)
+ *   NVS                 — session counter, last synced session
  */
 
 #include <stdio.h>
@@ -42,15 +42,15 @@ void app_main(void)
     // Initialise shared vehicle state
     vehicle_state_init();
 
-    // Deep queue — raw CAN frames at full bus rate plus 1Hz snapshots
-    QueueHandle_t log_queue = xQueueCreate(512, sizeof(log_msg_t));
+    // Small queue — only TRIP_START/TRIP_END events (no per-frame logging)
+    QueueHandle_t log_queue = xQueueCreate(8, sizeof(log_msg_t));
     configASSERT(log_queue);
 
-    // Core 1: CAN RX only — high-rate ISR-driven, must not be starved
-    // Core 0: SD logger + BLE — SD logger is mostly blocked on queue, BLE mostly idle
-    xTaskCreatePinnedToCore(can_rx_task,    "can_rx",    8192, log_queue, 5, NULL, 1);
-    xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 8192, log_queue, 4, NULL, 0);
-    xTaskCreatePinnedToCore(ble_nus_task,   "ble_nus",   8192, log_queue, 3, NULL, 0);
+    // Core 1: CAN RX — ISR-driven, decodes frames into vehicle_state only
+    // Core 0: SD logger waits for trip events; BLE handles phone sync
+    xTaskCreatePinnedToCore(can_rx_task,    "can_rx",    4096, NULL,       5, NULL, 1);
+    xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 4096, log_queue,  4, NULL, 0);
+    xTaskCreatePinnedToCore(ble_nus_task,   "ble_nus",   8192, log_queue,  3, NULL, 0);
 
     ESP_LOGI(TAG, "All tasks started");
 }

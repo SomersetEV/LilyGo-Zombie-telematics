@@ -46,27 +46,14 @@ typedef struct __attribute__((packed)) {
 
 } log_record_t;                 // ~46 bytes per record
 
-// ── Raw CAN frame for high-rate logging ──────────────────────────────────────
-typedef struct {
-    uint32_t tick_ms;
-    uint32_t id;
-    uint8_t  dlc;
-    uint8_t  data[8];
-} raw_can_log_t;
-
-// ── Log queue message — carries a data record, raw frame, or trip marker ─────
-// Using a tagged union keeps the queue a single type so both the CAN task
-// and the BLE task can post to it without a separate marker queue.
-
+// ── Log queue message — trip lifecycle events posted by ble_nus_task ─────────
 typedef enum {
-    LOG_MSG_RAW_FRAME,  // every CAN frame as it arrives
-    LOG_MSG_TRIP_START, // TRIP_START marker — write sentinel row to raw log
-    LOG_MSG_TRIP_END,   // TRIP_END marker   — write sentinel row to raw log
+    LOG_MSG_TRIP_START,
+    LOG_MSG_TRIP_END,
 } log_msg_type_t;
 
 typedef struct {
     log_msg_type_t type;
-    raw_can_log_t  frame; // only valid when type == LOG_MSG_RAW_FRAME
 } log_msg_t;
 
 // ── Live state (superset of log record, includes raw/debug fields) ───────────

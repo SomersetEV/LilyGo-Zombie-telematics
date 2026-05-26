@@ -121,15 +121,12 @@ static void handle_list_command(void)
      * Response: "LIST 0001,3600;0002,1800;\n"
      * Record count is approximate (file_size / 100 bytes per CSV row).
      */
-    uint32_t current_session = 0;
-    uint32_t last_synced     = 0;
+    uint32_t last_synced = 0;
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-        nvs_get_u32(nvs, "session_id",       &current_session);
         nvs_get_u32(nvs, NVS_KEY_LAST_SYNCED, &last_synced);
         nvs_close(nvs);
     }
-    uint32_t active_session = current_session > 0 ? current_session - 1 : 0;
 
     DIR *dir = opendir(MOUNT_POINT);
     if (!dir) {
@@ -142,8 +139,7 @@ static void handle_list_command(void)
     while ((entry = readdir(dir)) != NULL) {
         uint32_t sid;
         if (sscanf(entry->d_name, "snap_%04lu.csv", &sid) != 1) continue;
-        if (sid == active_session) continue;    // skip currently-open session
-        if (sid <= last_synced)    continue;    // skip already-synced sessions
+        if (sid <= last_synced) continue;    // skip already-synced sessions
 
         char path[280];
         snprintf(path, sizeof(path), MOUNT_POINT "/%s", entry->d_name);
