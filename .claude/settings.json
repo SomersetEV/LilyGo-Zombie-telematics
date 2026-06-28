@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\benay\\\\Documents\\\\GitHub\\\\LilyGo Zombie telematics\\\\\" -Directory | Select-Object Name)"
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\benay\\\\Documents\\\\GitHub\\\\LilyGo Zombie telematics\\\\\" -Directory | Select-Object Name)",
+      "Read(//c/Users/benay/**)",
+      "Read(//c/Users/benay/Downloads/**)"
     ]
   }
 }

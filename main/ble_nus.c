@@ -111,6 +111,29 @@ static int nus_notify_str(const char *str)
 
 // ── Command handlers ─────────────────────────────────────────────────────────
 
+// Count the actual SNAP1 data rows in a session file. This is the exact record
+// count the phone uses to size its parse buffer, so it must match reality — an
+// estimate (e.g. file_size / N) under-counts and the phone overruns its buffer
+// mid-transfer on long sessions. The CSV header line also starts with "SNAP1,"
+// but its first field is the literal "tick_ms"; data rows have a numeric tick,
+// so we only count rows whose 7th character is a digit. Lines longer than the
+// buffer are split by fgets, but only the first segment can match the prefix,
+// so no row is double-counted.
+static uint32_t count_snap_rows(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    uint32_t rows = 0;
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "SNAP1,", 6) == 0 && line[6] >= '0' && line[6] <= '9') {
+            rows++;
+        }
+    }
+    fclose(f);
+    return rows;
+}
+
 static void handle_list_command(void)
 {
     /*
@@ -119,7 +142,7 @@ static void handle_list_command(void)
      * Its ID = (NVS "session_id" - 1) since sd_logger increments on boot.
      *
      * Response: "LIST 0001,3600;0002,1800;\n"
-     * Record count is approximate (file_size / 100 bytes per CSV row).
+     * Record count is the exact number of SNAP1 data rows in each file.
      */
     uint32_t last_synced = 0;
     nvs_handle_t nvs;
@@ -145,7 +168,7 @@ static void handle_list_command(void)
         snprintf(path, sizeof(path), MOUNT_POINT "/%s", entry->d_name);
         struct stat st;
         if (stat(path, &st) != 0 || st.st_size == 0) continue;  // skip empty/unreadable files
-        uint32_t records = (uint32_t)(st.st_size / 100);
+        uint32_t records = count_snap_rows(path);
 
         char entry_str[32];
         int entry_len = snprintf(entry_str, sizeof(entry_str), "%04lu,%lu;", sid, records);
@@ -172,7 +195,10 @@ static void handle_get_command(uint32_t session_id)
      *
      * 20ms inter-chunk delay prevents Android BLE stack dropping packets.
      * At MTU 512 (509 byte chunks) this gives ~25KB/s — fine for our data rates.
-     * A 1-hour session at 1Hz / ~100 bytes/row = ~360KB ≈ 15 seconds transfer time.
+     * A 1-hour session at 1Hz / ~80 bytes/row = ~290KB ≈ 12 seconds transfer time.
+     *
+     * The phone sizes its buffers from the authoritative byte count in this
+     * header and the exact row count from LIST — never from a guessed row size.
      */
     char path[64];
     snprintf(path, sizeof(path), MOUNT_POINT "/snap_%04lu.csv", session_id);
