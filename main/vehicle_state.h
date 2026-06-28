@@ -42,7 +42,7 @@ typedef struct __attribute__((packed)) {
     uint16_t lv_volts_mv;       // mV (bytes[1]*125), from 0x39F
     uint8_t  lv_amps;           // A  (bytes[4] raw), from 0x39F
     uint8_t  plug_state;        // 0=unplugged 1=plugged, from 0x323 byte 5
-    int16_t  charger_temp;      // °C x10 ((byte[3]-50)*10), from 0x33B
+    int16_t  charger_temp;      // °C x10 ((byte[3]-40)*10), from 0x33B
 
 } log_record_t;                 // ~46 bytes per record
 

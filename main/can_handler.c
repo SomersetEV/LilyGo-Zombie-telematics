@@ -165,9 +165,9 @@ static void parse_mg_plug(const raw_frame_t *f, vehicle_state_t *state)
 
 static void parse_mg_temp(const raw_frame_t *f, vehicle_state_t *state)
 {
-    // 0x33B byte3 - 50 = charger temp_1 in °C, stored as °C x10
+    // 0x33B byte3 - 40 = charger temp_1 in °C, stored as °C x10
     if (f->dlc < 4) return;
-    state->latest.charger_temp = (int16_t)((int16_t)f->data[3] - 50) * 10;
+    state->latest.charger_temp = (int16_t)((int16_t)f->data[3] - 40) * 10;
 }
 
 // ── Task ──────────────────────────────────────────────────────────────────────

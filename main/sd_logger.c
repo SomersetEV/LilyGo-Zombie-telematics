@@ -128,13 +128,14 @@ static void trip_tick(void)
     // Write 1Hz SNAP1 row
     if (!snap_file) return;
     uint32_t tick_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
-    fprintf(snap_file, "SNAP1,%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
+    fprintf(snap_file, "SNAP1,%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u,%d\n",
         (unsigned long)tick_ms,
         (unsigned)r->soc, (unsigned)(r->pack_voltage_bms * 10u),
         (int)r->pack_current_ma, (int)r->isa_kw, (int)r->isa_ah,
         (int)r->motor_rpm, (int)r->motor_temp, (int)r->inverter_temp,
         (int)r->bms_temp_max, (int)r->bms_temp_min,
-        (unsigned)r->cell_voltage_max, (unsigned)r->cell_voltage_min);
+        (unsigned)r->cell_voltage_max, (unsigned)r->cell_voltage_min,
+        (int)r->charger_temp);
 }
 
 // ── Trip handlers ─────────────────────────────────────────────────────────────
@@ -158,7 +159,7 @@ static void handle_trip_start(void)
         fprintf(snap_file,
             "SNAP1,tick_ms,soc_pct,pack_v_bms_mv,pack_i_ma,"
             "isa_kw_w,isa_as,motor_rpm,motor_temp_c10,inv_temp_c10,"
-            "bms_tmax_c10,bms_tmin_c10,cell_v_max_mv,cell_v_min_mv\n");
+            "bms_tmax_c10,bms_tmin_c10,cell_v_max_mv,cell_v_min_mv,charger_temp_c10\n");
         fprintf(snap_file, "TRIP_START,,,,,,,,,,,,,\n");
         fflush(snap_file);
     } else {
