@@ -226,24 +226,30 @@ static void handle_get_command(uint32_t session_id)
     snprintf(end_marker, sizeof(end_marker), "END %04lu\n", session_id);
 
     while ((bytes_read = fread(buf, 1, chunk_size, f)) > 0) {
-        if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
-            ESP_LOGW(TAG, "Disconnected mid-transfer, aborting GET %04lu", session_id);
-            fclose(f);
-            return;
-        }
-        bool ok = false;
-        for (int retry = 0; retry < 3 && !ok; retry++) {
-            if (retry > 0) vTaskDelay(pdMS_TO_TICKS(50));
-            ok = (nus_notify(buf, (uint16_t)bytes_read) == 0);
-        }
-        if (!ok) {
-            ESP_LOGW(TAG, "GET %04lu: notify failed after retries, aborting", session_id);
-            fclose(f);
-            nus_notify_str(end_marker);  // phone checks size vs declared; can retry next connect
-            return;
+        // Flow-controlled send. nus_notify returns non-zero when the host mbuf
+        // pool is momentarily exhausted — i.e. we're producing faster than the
+        // radio drains. Instead of a fixed inter-chunk delay (which capped us at
+        // ~13 KB/s regardless of link speed), we push chunks back-to-back and
+        // only yield when the stack pushes back. The controller's ACL buffer
+        // count self-paces us to the real link throughput, and BLE's link-layer
+        // is already reliable, so no data is lost.
+        int stalled_ms = 0;
+        while (nus_notify(buf, (uint16_t)bytes_read) != 0) {
+            if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+                ESP_LOGW(TAG, "Disconnected mid-transfer, aborting GET %04lu", session_id);
+                fclose(f);
+                return;
+            }
+            // Continuous back-pressure for ~1s means the link has stalled.
+            if ((stalled_ms += 10) > 1000) {
+                ESP_LOGW(TAG, "GET %04lu: send stalled, aborting", session_id);
+                fclose(f);
+                nus_notify_str(end_marker);  // phone checks size vs declared; retries next connect
+                return;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
         total_sent += bytes_read;
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
     fclose(f);
 

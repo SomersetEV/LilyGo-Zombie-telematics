@@ -7,6 +7,9 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_ONLY=n
 CONFIG_BT_BLUEDROID_ENABLED=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Allow the full 512-byte ATT MTU the phone requests, so session sync streams
+# in ~509-byte chunks instead of ~253 — halves the number of notifications.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
 
 # FAT filesystem
 CONFIG_FATFS_CODEPAGE_850=y
