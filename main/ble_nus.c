@@ -111,45 +111,28 @@ static int nus_notify_str(const char *str)
 
 // ── Command handlers ─────────────────────────────────────────────────────────
 
-// Count the actual SNAP1 data rows in a session file. This is the exact record
-// count the phone uses to size its parse buffer, so it must match reality — an
-// estimate (e.g. file_size / N) under-counts and the phone overruns its buffer
-// mid-transfer on long sessions. The CSV header line also starts with "SNAP1,"
-// but its first field is the literal "tick_ms"; data rows have a numeric tick,
-// so we only count rows whose 7th character is a digit. Lines longer than the
-// buffer are split by fgets, but only the first segment can match the prefix,
-// so no row is double-counted.
-static uint32_t count_snap_rows(const char *path)
-{
-    FILE *f = fopen(path, "r");
-    if (!f) return 0;
-    uint32_t rows = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "SNAP1,", 6) == 0 && line[6] >= '0' && line[6] <= '9') {
-            rows++;
-        }
-    }
-    fclose(f);
-    return rows;
-}
-
 static void handle_list_command(void)
 {
     /*
      * Enumerate completed session files on SD card.
-     * The currently-open session (still being written) is excluded.
-     * Its ID = (NVS "session_id" - 1) since sd_logger increments on boot.
+     * The session file currently open for writing (snap_<session_id>.csv while a
+     * trip is active) is excluded — reading a file that's open for write on FATFS
+     * fails, so the phone would get an error mid-sync. When no trip is active the
+     * file is closed and safe to offer.
      *
      * Response: "LIST 0001,3600;0002,1800;\n"
-     * Record count is the exact number of SNAP1 data rows in each file.
+     * Record count is an approximate estimate (file_size / 100 bytes per row);
+     * the phone ignores it.
      */
-    uint32_t last_synced = 0;
+    uint32_t last_synced  = 0;
+    uint32_t open_session = 0;   // NVS "session_id" == the file sd_logger is writing
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_LAST_SYNCED, &last_synced);
+        nvs_get_u32(nvs, "session_id",        &open_session);
         nvs_close(nvs);
     }
+    bool trip_active = sd_logger_trip_active();
 
     DIR *dir = opendir(MOUNT_POINT);
     if (!dir) {
@@ -162,13 +145,19 @@ static void handle_list_command(void)
     while ((entry = readdir(dir)) != NULL) {
         uint32_t sid;
         if (sscanf(entry->d_name, "snap_%04lu.csv", &sid) != 1) continue;
-        if (sid <= last_synced) continue;    // skip already-synced sessions
+        if (sid <= last_synced) continue;                 // skip already-synced sessions
+        if (trip_active && sid == open_session) continue; // skip file open for writing
 
         char path[280];
         snprintf(path, sizeof(path), MOUNT_POINT "/%s", entry->d_name);
         struct stat st;
         if (stat(path, &st) != 0 || st.st_size == 0) continue;  // skip empty/unreadable files
-        uint32_t records = count_snap_rows(path);
+        // Record count is a cheap estimate (~100 bytes/row). The phone ignores
+        // this value entirely (see _parseListResponse), so never pay to read the
+        // whole file here — doing so made LIST slow enough to trip the phone's
+        // 30s timeout, and the resulting retries queued behind GET and stalled
+        // the download at 0%.
+        uint32_t records = (uint32_t)(st.st_size / 100);
 
         char entry_str[32];
         int entry_len = snprintf(entry_str, sizeof(entry_str), "%04lu,%lu;", sid, records);
