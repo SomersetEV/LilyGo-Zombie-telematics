@@ -22,6 +22,7 @@
 #include "nvs_flash.h"
 
 #include "can_handler.h"
+#include "can_logger.h"
 #include "sd_logger.h"
 #include "ble_nus.h"
 #include "vehicle_state.h"
@@ -48,9 +49,10 @@ void app_main(void)
 
     // Core 1: CAN RX — ISR-driven, decodes frames into vehicle_state only
     // Core 0: SD logger waits for trip events; BLE handles phone sync
-    xTaskCreatePinnedToCore(can_rx_task,    "can_rx",    4096, NULL,       5, NULL, 1);
-    xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 4096, log_queue,  4, NULL, 0);
-    xTaskCreatePinnedToCore(ble_nus_task,   "ble_nus",   8192, log_queue,  3, NULL, 0);
+    xTaskCreatePinnedToCore(can_rx_task,     "can_rx",     4096, NULL,       5, NULL, 1);
+    xTaskCreatePinnedToCore(sd_logger_task,  "sd_logger",  4096, log_queue,  4, NULL, 0);
+    xTaskCreatePinnedToCore(can_logger_task, "can_logger", 4096, NULL,       4, NULL, 0);
+    xTaskCreatePinnedToCore(ble_nus_task,    "ble_nus",    8192, log_queue,  3, NULL, 0);
 
     ESP_LOGI(TAG, "All tasks started");
 }

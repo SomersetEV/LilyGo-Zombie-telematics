@@ -19,6 +19,7 @@
 #include "ble_nus.h"
 #include "vehicle_state.h"
 #include "sd_logger.h"
+#include "can_logger.h"
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -325,9 +326,10 @@ static void handle_trip_marker(log_msg_type_t type)
 
 static void handle_status_command(void)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "STATUS trip=%d\n",
-             sd_logger_trip_active() ? 1 : 0);
+    char buf[40];
+    snprintf(buf, sizeof(buf), "STATUS trip=%d canlog=%d\n",
+             sd_logger_trip_active() ? 1 : 0,
+             can_logger_active()     ? 1 : 0);
     nus_notify_str(buf);
 }
 
@@ -408,6 +410,8 @@ static void dispatch_command(const char *cmd, uint16_t len)
     else if (sscanf(cmd, "TIME %lu",    &arg) == 1)    { handle_time_command(arg);                 }
     else if (strncmp(cmd, "TRIP_START", 10) == 0)      { handle_trip_marker(LOG_MSG_TRIP_START);   }
     else if (strncmp(cmd, "TRIP_END",   8) == 0)       { handle_trip_marker(LOG_MSG_TRIP_END);     }
+    else if (strncmp(cmd, "CANLOG_START", 12) == 0)    { can_logger_start(); nus_notify_str("OK\n"); }
+    else if (strncmp(cmd, "CANLOG_STOP", 11) == 0)     { can_logger_stop();  nus_notify_str("OK\n"); }
     else if (strncmp(cmd, "STATUS",     6) == 0)       { handle_status_command();                  }
     else {
         ESP_LOGW(TAG, "Unknown cmd: %.*s", len, cmd);

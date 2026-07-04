@@ -1,5 +1,6 @@
 #include "can_handler.h"
 #include "vehicle_state.h"
+#include "can_logger.h"
 #include "esp_twai_onchip.h"
 #include "esp_twai.h"
 #include "esp_log.h"
@@ -206,6 +207,7 @@ void can_rx_task(void *pvParameters)
     while (1) {
         if (xQueueReceive(s_rx_queue, &f, portMAX_DELAY) == pdTRUE) {
             s_frame_count++;
+            can_logger_submit(f.id, f.dlc, f.data);  // unfiltered raw capture (when active)
             switch (f.id) {
                 case CAN_ID_BMS_SOC:        parse_bms_soc(&f, state);                       break;
                 case CAN_ID_BMS_PACK:       parse_bms_pack(&f, state);                      break;

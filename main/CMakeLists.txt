@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "can_handler.c"
+        "can_logger.c"
         "sd_logger.c"
         "ble_nus.c"
         "vehicle_state.c"
