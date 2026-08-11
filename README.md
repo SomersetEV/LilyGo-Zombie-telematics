@@ -44,9 +44,44 @@ The device advertises as `SomersetEV-Tractor`. The phone app communicates over N
 | `TIME <unix>` | Set RTC offset from phone clock |
 | `TRIP_START` | Insert trip start marker |
 | `TRIP_END` | Insert trip end marker with summary |
+| `STATUS` | Report trip state — `STATUS trip=<0\|1>` |
+| `SUMMARY <id>` | Re-emit a session's trip summary as a `JOB` line |
+| `SPD <centi_mph> <fix> [<heading_ddeg>]` | GPS ground speed from the phone. No reply. |
+| `SPDCAN <0\|1>` | Enable/disable the CAN speed broadcast (persisted, needs reboot) |
+| `SPDSTAT` | Report GPS speed cache and CAN TX counters |
+
+## GPS speed relay
+
+The phone app streams its GPS ground speed over BLE (`SPD`, 5 Hz) and the device
+re-broadcasts it on CAN so the Leyland 255 Nextion dash can show road speed —
+replacing an untested NEO-6M module on the dash.
+
+Frame `0x3E8`, 8 bytes, 10 Hz:
+
+| byte | field |
+|---|---|
+| 0-1 | speed, uint16 LE, 0.01 mph. `0xFFFF` = unknown (never 0) |
+| 2-3 | heading, uint16 LE, 0.1 deg. `0xFFFF` = unknown |
+| 4 | status: b0 valid, b1 gps fix, b2 phone connected, b3 stale |
+| 5 | sample age in 10 ms units, saturating at `0xFF` |
+| 6 | rolling counter, +1 per frame |
+| 7 | XOR checksum of bytes 0-6 |
+
+If the phone disconnects or its fix goes stale (>1 s), the frame keeps
+transmitting with speed `0xFFFF` and the valid bit clear. It never publishes
+0 mph on loss — a consumer must not mistake "unknown" for "stopped".
+
+> **This is the only feature that makes the device transmit.** By default the
+> TWAI node is created listen-only exactly as before. `SPDCAN 1` clears
+> listen-only at the next boot, which makes the device an error-active bus
+> participant that **ACKs every frame** on the vehicle bus. Enable it
+> deliberately, stationary, and confirm `0x3E8` is unused on your bus first
+> (grep the archived `session_*.csv` logs). Transmit is additionally gated on
+> having received 20 frames, and latches off after 10 consecutive unACKed
+> transmits or 5 bus-off events — check `SPDSTAT` for the reason.
 
 ## Built With
 
-- [ESP-IDF](https://github.com/espressif/esp-idf) v6.0
+- [ESP-IDF](https://github.com/espressif/esp-idf) v5.5.2
 - NimBLE (via ESP-IDF `bt` component)
-- ESP TWAI (onchip CAN driver)
+- ESP TWAI (onchip CAN driver, node API — requires IDF >= 5.5)

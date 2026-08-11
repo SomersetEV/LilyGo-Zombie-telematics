@@ -1,9 +1,11 @@
 #include "can_handler.h"
 #include "vehicle_state.h"
 #include "ble_nus.h"
+#include "speed_bridge.h"
 #include "esp_twai_onchip.h"
 #include "esp_twai.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -14,6 +16,16 @@ static const char *TAG = "CAN";
 // ── LILYGO T-CAN485 pin assignments ─────────────────────────────────────────
 #define CAN_TX_PIN  GPIO_NUM_27
 #define CAN_RX_PIN  GPIO_NUM_26
+
+// Transceiver control. UNVERIFIED against the board schematic — these are from
+// the LilyGo T-CAN485 reference design. Listen-only RX works today without
+// touching them, so they are driven ONLY when CAN TX is explicitly enabled;
+// the passive path stays bit-for-bit as it always was.
+// This matters specifically for TX: the transceivers used on these boards
+// (SN65HVD230 Rs, TJA1051 S) keep the receiver alive in standby while
+// disabling the transmitter — the classic "RX fine, transmits nothing" symptom.
+#define CAN_5V_EN_PIN  GPIO_NUM_16
+#define CAN_SE_PIN     GPIO_NUM_23
 
 // ── M3 BMS CAN IDs (SomersetEV/Tesla-M3-Bms-Software CAN_Common.cpp) ────────
 #define CAN_ID_BMS_SOC      0x355   // SoC / SoH
@@ -51,6 +63,15 @@ static QueueHandle_t      s_rx_queue    = NULL;
 static QueueHandle_t      s_log_queue   = NULL;  // shared with sd_logger
 static volatile uint32_t  s_frame_count = 0;
 
+// ── TX state (see can_handler.h) ─────────────────────────────────────────────
+static volatile bool     s_tx_capable      = false;  // node created non-listen-only
+static volatile bool     s_bus_off_flag    = false;  // set in ISR, cleared in service()
+static volatile uint32_t s_tx_ok           = 0;
+static volatile uint32_t s_tx_fail         = 0;
+static volatile uint32_t s_ack_fail_streak = 0;
+static volatile uint32_t s_bus_off_count   = 0;
+static volatile uint32_t s_last_err_flags  = 0;
+
 // ── ISR callback — called when a CAN frame arrives ───────────────────────────
 static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
                                       const twai_rx_done_event_data_t *edata,
@@ -71,6 +92,63 @@ static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
     BaseType_t woken = pdFALSE;
     xQueueSendFromISR(s_rx_queue, &f, &woken);
     return woken == pdTRUE;
+}
+
+// ── TX / error / state ISR callbacks ─────────────────────────────────────────
+// ISR context: counter bumps and flag sets only. twai_node_recover() is NOT
+// ISR-safe, so bus-off is flagged here and acted on in can_handler_service().
+
+static bool IRAM_ATTR twai_tx_done_cb(twai_node_handle_t handle,
+                                      const twai_tx_done_event_data_t *edata,
+                                      void *user_ctx)
+{
+    (void)handle; (void)user_ctx;
+    if (edata->is_tx_success) {
+        s_tx_ok++;
+        s_ack_fail_streak = 0;
+    } else {
+        s_tx_fail++;
+        s_ack_fail_streak++;
+    }
+    return false;
+}
+
+static bool IRAM_ATTR twai_error_cb(twai_node_handle_t handle,
+                                    const twai_error_event_data_t *edata,
+                                    void *user_ctx)
+{
+    (void)handle; (void)user_ctx;
+    s_last_err_flags = edata->err_flags.val;   // ack_err bit = nobody else on the bus
+    return false;
+}
+
+static bool IRAM_ATTR twai_state_cb(twai_node_handle_t handle,
+                                    const twai_state_change_event_data_t *edata,
+                                    void *user_ctx)
+{
+    (void)handle; (void)user_ctx;
+    if (edata->new_sta == TWAI_ERROR_BUS_OFF) {
+        s_bus_off_flag = true;
+        s_bus_off_count++;
+    }
+    return false;
+}
+
+// Drive the transceiver out of standby and enable the 5V boost rail.
+static void can_transceiver_enable(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << CAN_5V_EN_PIN) | (1ULL << CAN_SE_PIN),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io));
+    gpio_set_level(CAN_5V_EN_PIN, 1);   // boost rail on
+    gpio_set_level(CAN_SE_PIN, 0);      // SE/Rs low = normal (high-speed) mode
+    ESP_LOGI(TAG, "transceiver enabled (5V_EN=GPIO%d high, SE=GPIO%d low)",
+             CAN_5V_EN_PIN, CAN_SE_PIN);
 }
 
 // ── Frame parsers ─────────────────────────────────────────────────────────────
@@ -183,6 +261,12 @@ void can_rx_task(void *pvParameters)
     s_rx_queue = xQueueCreate(256, sizeof(raw_frame_t));
     configASSERT(s_rx_queue);
 
+    // Clearing enable_listen_only makes this an error-active bus participant
+    // that ACKs every frame — a real change to how it affects a live vehicle
+    // bus. It is gated behind the SPDCAN NVS flag, applied here at node
+    // creation because the flag is fixed for the node's lifetime.
+    bool tx_en = speed_bridge_tx_enabled();
+
     twai_onchip_node_config_t node_cfg = {
         .io_cfg = {
             .tx = CAN_TX_PIN,
@@ -191,16 +275,48 @@ void can_rx_task(void *pvParameters)
             .bus_off_indicator = -1,
         },
         .bit_timing = { .bitrate = 500000 },
-        .flags = { .enable_listen_only = 1 },
     };
 
-    ESP_ERROR_CHECK(twai_new_node_onchip(&node_cfg, &s_node));
+    if (tx_en) {
+        // tx_queue_depth > 0 is MANDATORY when not listen-only — the driver
+        // rejects the config otherwise (esp_twai_onchip.c: "tx_queue_depth at
+        // least 1"), which under ESP_ERROR_CHECK would be a boot loop.
+        node_cfg.tx_queue_depth = 4;
+        // On ESP32 this is a single-shot switch, not a counter: the HAL does
+        // `.ss = retry_cnt != -1`. 0 => drop a failed frame and retry next
+        // cycle. -1 would retransmit forever and drive an unACKed bus to
+        // bus-off.
+        node_cfg.fail_retry_cnt = 0;
+        can_transceiver_enable();
+    } else {
+        node_cfg.flags.enable_listen_only = 1;
+    }
 
-    twai_event_callbacks_t cbs = { .on_rx_done = twai_rx_done_cb };
+    esp_err_t err = twai_new_node_onchip(&node_cfg, &s_node);
+    if (err != ESP_OK && tx_en) {
+        // A bad TX config must degrade to today's passive behaviour, never to
+        // a boot loop.
+        ESP_LOGE(TAG, "TX-capable node failed (%s) — falling back to listen-only",
+                 esp_err_to_name(err));
+        tx_en = false;
+        node_cfg.tx_queue_depth = 0;
+        node_cfg.fail_retry_cnt = 0;
+        node_cfg.flags.enable_listen_only = 1;
+        err = twai_new_node_onchip(&node_cfg, &s_node);
+    }
+    ESP_ERROR_CHECK(err);
+
+    twai_event_callbacks_t cbs = {
+        .on_rx_done      = twai_rx_done_cb,
+        .on_tx_done      = tx_en ? twai_tx_done_cb : NULL,
+        .on_state_change = twai_state_cb,
+        .on_error        = twai_error_cb,
+    };
     ESP_ERROR_CHECK(twai_node_register_event_callbacks(s_node, &cbs, NULL));
 
     ESP_ERROR_CHECK(twai_node_enable(s_node));
-    ESP_LOGI(TAG, "TWAI started, 500kbps listen-only");
+    s_tx_capable = tx_en;
+    ESP_LOGI(TAG, "TWAI started, 500kbps %s", tx_en ? "TX-ENABLED (acks bus)" : "listen-only");
 
     raw_frame_t f;
 
@@ -224,6 +340,9 @@ void can_rx_task(void *pvParameters)
                 case CAN_ID_MG_LV:          parse_mg_lv(&f, state);                         break;
                 case CAN_ID_MG_PLUG:        parse_mg_plug(&f, state);                       break;
                 case CAN_ID_MG_TEMP:        parse_mg_temp(&f, state);                       break;
+                // Without loopback the node never sees its own frames, so any
+                // sighting of our TX id means another node already owns it.
+                case SPEED_CAN_ID:          speed_bridge_note_collision();                  break;
                 default: break;
             }
 
@@ -250,3 +369,32 @@ void can_rx_task(void *pvParameters)
 uint32_t can_handler_frame_count(void) {
     return s_frame_count;
 }
+
+// ── Transmit API ─────────────────────────────────────────────────────────────
+
+esp_err_t can_handler_transmit(const twai_frame_t *frame, int timeout_ms)
+{
+    if (s_node == NULL)  return ESP_ERR_INVALID_STATE;
+    if (!s_tx_capable)   return ESP_ERR_NOT_SUPPORTED;
+    return twai_node_transmit(s_node, frame, timeout_ms);
+}
+
+bool can_handler_tx_capable(void) {
+    return s_tx_capable && s_node != NULL;
+}
+
+// Task context only — twai_node_recover() is not ISR-safe.
+void can_handler_service(void)
+{
+    if (!s_bus_off_flag || s_node == NULL) return;
+    s_bus_off_flag = false;
+    esp_err_t err = twai_node_recover(s_node);
+    ESP_LOGW(TAG, "bus-off #%lu, recover: %s (err_flags=0x%lx)",
+             (unsigned long)s_bus_off_count, esp_err_to_name(err),
+             (unsigned long)s_last_err_flags);
+}
+
+uint32_t can_handler_tx_ok_count(void)      { return s_tx_ok; }
+uint32_t can_handler_tx_fail_count(void)    { return s_tx_fail; }
+uint32_t can_handler_ack_fail_streak(void)  { return s_ack_fail_streak; }
+uint32_t can_handler_bus_off_count(void)    { return s_bus_off_count; }

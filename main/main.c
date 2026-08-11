@@ -25,6 +25,7 @@
 #include "sd_logger.h"
 #include "ble_nus.h"
 #include "vehicle_state.h"
+#include "speed_bridge.h"
 
 static const char *TAG = "MAIN";
 
@@ -42,6 +43,10 @@ void app_main(void)
     // Initialise shared vehicle state
     vehicle_state_init();
 
+    // Must precede can_rx_task (reads the CAN TX gate) and ble_nus_task
+    // (the GATT callback writes the speed cache).
+    speed_bridge_init();
+
     // Deep queue — raw CAN frames at full bus rate plus 1Hz snapshots
     QueueHandle_t log_queue = xQueueCreate(512, sizeof(log_msg_t));
     configASSERT(log_queue);
@@ -50,6 +55,11 @@ void app_main(void)
     xTaskCreatePinnedToCore(can_rx_task,    "can_rx",    4096, log_queue, 5, NULL, 1);
     xTaskCreatePinnedToCore(sd_logger_task, "sd_logger", 8192, log_queue, 3, NULL, 1);
     xTaskCreatePinnedToCore(ble_nus_task,   "ble_nus",   8192, log_queue, 4, NULL, 0);
+
+    // GPS speed -> CAN broadcast. Core 1 with the other CAN work; priority 4 is
+    // below can_rx (5) so RX always wins, above sd_logger (3) so an SD write
+    // cannot delay the cycle. Exits immediately if the NVS gate is off.
+    xTaskCreatePinnedToCore(speed_tx_task,  "speed_tx",  3072, NULL,      4, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks started");
 }

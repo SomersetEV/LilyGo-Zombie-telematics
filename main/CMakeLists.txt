@@ -5,6 +5,7 @@ idf_component_register(
         "sd_logger.c"
         "ble_nus.c"
         "vehicle_state.c"
+        "speed_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES
         driver

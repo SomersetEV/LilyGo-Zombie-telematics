@@ -20,6 +20,7 @@
 #include "vehicle_state.h"
 #include "sd_logger.h"
 #include "can_handler.h"
+#include "speed_bridge.h"
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -312,6 +313,25 @@ static void handle_status_command(void)
     nus_notify_str(buf);
 }
 
+// SPDCAN <0|1> — gate the GPS-speed CAN broadcast. Enabling makes the device an
+// error-active bus participant that ACKs every frame, so it only takes effect
+// at the next boot (enable_listen_only is fixed at node creation).
+static void handle_spdcan_command(uint32_t enable)
+{
+    if (speed_bridge_set_tx_enabled(enable != 0)) {
+        nus_notify_str("OK reboot_required\n");
+    } else {
+        nus_notify_str("ERR nvs\n");
+    }
+}
+
+static void handle_spdstat_command(void)
+{
+    char buf[160];
+    speed_bridge_status_str(buf, sizeof(buf));
+    nus_notify_str(buf);
+}
+
 static void handle_summary_command(uint32_t session_id)
 {
     /*
@@ -391,6 +411,8 @@ static void dispatch_command(const char *cmd, uint16_t len)
     else if (strncmp(cmd, "TRIP_START", 10) == 0)      { handle_trip_marker(LOG_MSG_TRIP_START);   }
     else if (strncmp(cmd, "TRIP_END",   8) == 0)       { handle_trip_marker(LOG_MSG_TRIP_END);     }
     else if (strncmp(cmd, "STATUS",     6) == 0)       { handle_status_command();                  }
+    else if (sscanf(cmd, "SPDCAN %lu",  &arg) == 1)    { handle_spdcan_command(arg);               }
+    else if (strncmp(cmd, "SPDSTAT",    7) == 0)       { handle_spdstat_command();                 }
     else {
         ESP_LOGW(TAG, "Unknown cmd: %.*s", len, cmd);
         nus_notify_str("ERR unknown_cmd\n");
@@ -416,6 +438,18 @@ static int nus_rx_access_cb(uint16_t conn_hdl, uint16_t attr_handle,
     while (cmd.len > 0 &&
            (cmd.text[cmd.len-1] == '\n' || cmd.text[cmd.len-1] == '\r')) {
         cmd.text[--cmd.len] = '\0';
+    }
+
+    // GPS speed is handled here rather than via cmd_queue, deliberately:
+    //   1. dispatch_command() forces APP_MODE_TELEMATICS on every command, so
+    //      routing SPD through it would kick a Speedo-mode app out of its own
+    //      live CAN stream.
+    //   2. cmd_queue is depth 8 with zero block time and drops silently, while
+    //      handle_get_command() occupies the consumer task for seconds. A
+    //      streaming SPD would fill the queue and starve DONE/TRIP_END/STATUS.
+    // The work is an integer parse plus a small struct copy — safe here.
+    if (speed_bridge_try_consume(cmd.text, cmd.len)) {
+        return 0;
     }
 
     if (xQueueSend(cmd_queue, &cmd, 0) != pdTRUE) {
@@ -467,6 +501,11 @@ static void restart_advertising(void)
                       &adv_params, gap_event_handler, NULL);
 }
 
+bool ble_nus_is_connected(void)
+{
+    return conn_handle != BLE_HS_CONN_HANDLE_NONE;
+}
+
 static int gap_event_handler(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -493,6 +532,9 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             raw_can_log_t tmp;
             while (xQueueReceive(g_ble_live_queue, &tmp, 0) == pdTRUE) {}
         }
+        // Stop the CAN speed broadcast immediately rather than waiting out the
+        // staleness timeout — the phone is gone, the speed is meaningless.
+        speed_bridge_invalidate();
         ESP_LOGI(TAG, "Disconnected — reason=%d", event->disconnect.reason);
         restart_advertising();
         break;
