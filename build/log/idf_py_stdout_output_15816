@@ -1,0 +1,248 @@
+Command: ninja all
+[1/136] Generating project_elf_src_esp32.c
+[2/136] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32/memory.ld.in -> C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/esp_system/ld/memory.ld
+[3/136] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/esp_system/ld/esp32/sections.ld.in -> C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/esp_system/ld/sections.ld.in
+[4/136] Linking C static library esp-idf\esp_https_ota\libesp_https_ota.a
+[5/136] Generating ../../partition_table/partition-table.bin
+Partition table binary generated. Contents:
+*******************************************************************************
+# ESP-IDF Partition Table
+# Name, Type, SubType, Offset, Size, Flags
+nvs,data,nvs,0x9000,24K,
+phy_init,data,phy,0xf000,4K,
+factory,app,factory,0x10000,1M,
+*******************************************************************************
+[6/136] Linking C static library esp-idf\esp_http_server\libesp_http_server.a
+[7/136] Creating directories for 'bootloader'
+[8/136] No download step for 'bootloader'
+[9/136] Linking C static library esp-idf\esp_http_client\libesp_http_client.a
+[10/136] No update step for 'bootloader'
+[11/136] No patch step for 'bootloader'
+[12/136] Linking C static library esp-idf\tcp_transport\libtcp_transport.a
+[13/136] Linking C static library esp-idf\esp_adc\libesp_adc.a
+[14/136] Linking C static library esp-idf\esp_driver_i2s\libesp_driver_i2s.a
+[15/136] Linking C static library esp-idf\esp-tls\libesp-tls.a
+[16/136] Linking C static library esp-idf\http_parser\libhttp_parser.a
+[17/136] Linking C static library esp-idf\esp_hal_i2c\libesp_hal_i2c.a
+[18/136] Linking C static library esp-idf\esp_gdbstub\libesp_gdbstub.a
+[19/136] Linking C static library esp-idf\esp_wifi\libesp_wifi.a
+[20/136] Linking C static library esp-idf\esp_coex\libesp_coex.a
+[21/136] Linking C static library esp-idf\wpa_supplicant\libwpa_supplicant.a
+[22/136] Linking C static library esp-idf\esp_netif\libesp_netif.a
+[23/136] Linking C static library esp-idf\lwip\liblwip.a
+[24/136] Linking C static library esp-idf\vfs\libvfs.a
+[25/136] Linking C static library esp-idf\esp_phy\libesp_phy.a
+[26/136] Linking C static library esp-idf\nvs_flash\libnvs_flash.a
+[27/136] Linking C static library esp-idf\nvs_sec_provider\libnvs_sec_provider.a
+[28/136] Linking C static library esp-idf\esp_event\libesp_event.a
+[29/136] Linking C static library esp-idf\esp_driver_uart\libesp_driver_uart.a
+[30/136] Linking C static library esp-idf\esp_psram\libesp_psram.a
+[31/136] Linking C static library esp-idf\esp_ringbuf\libesp_ringbuf.a
+[32/136] Linking C static library esp-idf\esp_timer\libesp_timer.a
+[33/136] Linking C static library esp-idf\cxx\libcxx.a
+[34/136] Linking C static library esp-idf\pthread\libpthread.a
+[35/136] Linking C static library esp-idf\esp_libc\libesp_libc.a
+[36/136] Linking C static library esp-idf\freertos\libfreertos.a
+[37/136] Linking C static library esp-idf\esp_hw_support\libesp_hw_support.a
+[38/136] Linking C static library esp-idf\esp_hal_touch_sens\libesp_hal_touch_sens.a
+[39/136] Linking C static library esp-idf\esp_hal_pmu\libesp_hal_pmu.a
+[40/136] Linking C static library esp-idf\esp_hal_gpio\libesp_hal_gpio.a
+[41/136] Linking C static library esp-idf\soc\libsoc.a
+[42/136] Linking C static library esp-idf\heap\libheap.a
+[43/136] Linking C static library esp-idf\log\liblog.a
+[44/136] Linking C static library esp-idf\hal\libhal.a
+[45/136] Linking C static library esp-idf\esp_rom\libesp_rom.a
+[46/136] Linking C static library esp-idf\esp_common\libesp_common.a
+[47/136] Linking C static library esp-idf\esp_system\libesp_system.a
+[48/136] Linking C static library esp-idf\spi_flash\libspi_flash.a
+[49/136] Linking C static library esp-idf\bootloader_support\libbootloader_support.a
+[50/136] Linking C static library esp-idf\esp_hal_ana_conv\libesp_hal_ana_conv.a
+[51/136] Linking C static library esp-idf\esp_hal_i2s\libesp_hal_i2s.a
+[52/136] Linking C static library esp-idf\esp_hal_wdt\libesp_hal_wdt.a
+[53/136] Linking C static library esp-idf\esp_hal_timg\libesp_hal_timg.a
+[54/136] Linking CXX static library esp-idf\mbedtls\mbedtls\tf-psa-crypto\core\libtfpsacrypto.a
+[55/136] Linking CXX static library esp-idf\mbedtls\mbedtls\library\libmbedtls.a
+[56/136] Linking CXX static library esp-idf\mbedtls\mbedtls\library\libmbedx509.a
+[57/136] Linking CXX static library esp-idf\mbedtls\mbedtls\tf-psa-crypto\drivers\builtin\libmbed-builtin.a
+[58/136] Linking CXX static library esp-idf\mbedtls\mbedtls\tf-psa-crypto\drivers\p256-m\libp256m.a
+[59/136] Linking CXX static library esp-idf\mbedtls\mbedtls\tf-psa-crypto\drivers\everest\libeverest.a
+[60/136] Generating x509_crt_bundle
+[61/136] Generating ../../x509_crt_bundle.S
+[62/136] Building ASM object esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/__/__/x509_crt_bundle.S.obj
+[63/136] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/vehicle_state.c.obj
+[64/136] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj
+[65/136] Linking C static library esp-idf\mbedtls\libmbedtls.a
+[66/136] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/sd_logger.c.obj
+[67/136] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/ble_nus.c.obj
+[68/136] Linking C static library esp-idf\esp_driver_dma\libesp_driver_dma.a
+[69/136] Linking C static library esp-idf\esp_mm\libesp_mm.a
+[70/136] Linking C static library esp-idf\esp_pm\libesp_pm.a
+[71/136] Linking C static library esp-idf\esp_hal_uart\libesp_hal_uart.a
+[72/136] Linking C static library esp-idf\esp_driver_gpio\libesp_driver_gpio.a
+[73/136] Linking C static library esp-idf\esp_security\libesp_security.a
+[74/136] Linking C static library esp-idf\efuse\libefuse.a
+[75/136] Linking C static library esp-idf\esp_partition\libesp_partition.a
+[76/136] Linking C static library esp-idf\app_update\libapp_update.a
+[77/136] Linking C static library esp-idf\esp_bootloader_format\libesp_bootloader_format.a
+[78/136] Linking C static library esp-idf\esp_app_format\libesp_app_format.a
+[79/136] Linking C static library esp-idf\esp_hal_security\libesp_hal_security.a
+[80/136] Linking C static library esp-idf\esp_hal_mspi\libesp_hal_mspi.a
+[81/136] Linking C static library esp-idf\esp_hal_clock\libesp_hal_clock.a
+[82/136] Linking C static library esp-idf\esp_hal_gpspi\libesp_hal_gpspi.a
+[83/136] Linking C static library esp-idf\esp_stdio\libesp_stdio.a
+[84/136] Linking C static library esp-idf\xtensa\libxtensa.a
+[85/136] Linking C static library esp-idf\esp_hal_sd\libesp_hal_sd.a
+[86/136] Linking C static library esp-idf\esp_driver_spi\libesp_driver_spi.a
+[87/136] Linking C static library esp-idf\wear_levelling\libwear_levelling.a
+[88/136] Linking C static library esp-idf\esp_hal_twai\libesp_hal_twai.a
+[89/136] Linking C static library esp-idf\console\libconsole.a
+[90/136] Linking C static library esp-idf\protobuf-c\libprotobuf-c.a
+[91/136] Linking C static library esp-idf\esp_hal_rmt\libesp_hal_rmt.a
+[92/136] Linking C static library esp-idf\esp_hal_ledc\libesp_hal_ledc.a
+[93/136] Linking C static library esp-idf\esp_driver_i2c\libesp_driver_i2c.a
+[94/136] Linking C static library esp-idf\esp_hal_mcpwm\libesp_hal_mcpwm.a
+[95/136] Linking C static library esp-idf\esp_hal_pcnt\libesp_hal_pcnt.a
+[96/136] Linking C static library esp-idf\unity\libunity.a
+[97/136] Linking C static library esp-idf\sdmmc\libsdmmc.a
+[98/136] Linking C static library esp-idf\esp_hal_lcd\libesp_hal_lcd.a
+[99/136] Linking C static library esp-idf\esp_https_server\libesp_https_server.a
+[100/136] Linking C static library esp-idf\esp_driver_twai\libesp_driver_twai.a
+[101/136] Linking C static library esp-idf\esp_driver_gptimer\libesp_driver_gptimer.a
+[102/136] Linking C static library esp-idf\driver\libdriver.a
+[103/136] Linking C static library esp-idf\esp_blockdev_util\libesp_blockdev_util.a
+[104/136] Linking C static library esp-idf\esp_driver_dac\libesp_driver_dac.a
+[105/136] Linking C static library esp-idf\esp_driver_ledc\libesp_driver_ledc.a
+[106/136] Linking C static library esp-idf\esp_driver_cam\libesp_driver_cam.a
+[107/136] Linking C static library esp-idf\esp_driver_mcpwm\libesp_driver_mcpwm.a
+[108/136] Linking C static library esp-idf\cmock\libcmock.a
+[109/136] Linking C static library esp-idf\esp_driver_sd_intf\libesp_driver_sd_intf.a
+[110/136] Linking C static library esp-idf\esp_driver_sdspi\libesp_driver_sdspi.a
+[111/136] Linking C static library esp-idf\esp_driver_pcnt\libesp_driver_pcnt.a
+[112/136] Linking C static library esp-idf\esp_driver_sdio\libesp_driver_sdio.a
+[113/136] Linking C static library esp-idf\esp_driver_sdm\libesp_driver_sdm.a
+[114/136] Linking C static library esp-idf\esp_driver_rmt\libesp_driver_rmt.a
+[115/136] Linking C static library esp-idf\esp_driver_touch_sens\libesp_driver_touch_sens.a
+[116/136] Linking C static library esp-idf\rt\librt.a
+[117/136] Linking C static library esp-idf\esp_eth\libesp_eth.a
+[118/136] Linking C static library esp-idf\perfmon\libperfmon.a
+[119/136] Linking C static library esp-idf\esp_lcd\libesp_lcd.a
+[120/136] Linking C static library esp-idf\esp_driver_sdmmc\libesp_driver_sdmmc.a
+[121/136] Linking C static library esp-idf\spiffs\libspiffs.a
+[122/136] Linking C static library esp-idf\bt\libbt.a
+[123/136] Linking C static library esp-idf\fatfs\libfatfs.a
+[124/136] Linking C static library esp-idf\esp_hid\libesp_hid.a
+[125/136] Linking C static library esp-idf\protocomm\libprotocomm.a
+[126/136] Linking C static library esp-idf\main\libmain.a
+[127/136] Linking C static library esp-idf\esp_local_ctrl\libesp_local_ctrl.a
+[128/136] Performing configure step for 'bootloader'
+-- Component directory C:/esp/v6.0.1/esp-idf/components/mqtt does not contain a CMakeLists.txt file. No component will be added
+-- Minimal build - OFF
+-- Building ESP-IDF components for target esp32
+-- ESP-TEE is currently supported only on the esp32c6;esp32h2;esp32c5;esp32c61 SoCs
+-- KCONFIG_REPORT_VERBOSITY not set, using default
+-- Project sdkconfig file C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/sdkconfig
+Configuration Report                                                           
++-----------------------------------------------------------------------------+
+|  Parser Version: 1                                                          |
+|  Verbosity: default                                                         |
+|  Defaults policy: sdkconfig                                                 |
+|  Status: Finished with notifications                                        |
+|                                                                             |
+| Default Value Mismatch                                                      |
+| +-------------------------------------------------------------------------+ |
+| | Using sdkconfig default values                                       |  | |
+| | Choice symbols with different default selection between sdkconfig    |  | |
+| | and Kconfig                                                          |  | |
+| | ESP_SYSTEM_CHECK_INT_LEVEL: Kconfig default selection:               |  | |
+| | ESP_SYSTEM_CHECK_INT_LEVEL_4, sdkconfig default selection:           |  | |
+| | ESP_SYSTEM_CHECK_INT_LEVEL_5                                         |  | |
+| +-------------------------------------------------------------------------+ |
++-----------------------------------------------------------------------------+
+-- Compiler supported targets: xtensa-esp-elf
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/soc/esp32/ld/esp32.peripherals.ld
+-- Bootloader project name: "bootloader" version: 1
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32/ld/esp32.rom.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32/ld/esp32.rom.api.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libgcc.ld
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libc-funcs.ld
+Traceback (most recent call last):
+  File "C:\esp\v6.0.1\esp-idf\components\esp_rom\gen_gdbinit.py", line 72, in <module>
+    gdbinit_lines = generate_gdbinit_rom_add_symbols(target)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\esp\v6.0.1\esp-idf\components\esp_rom\gen_gdbinit.py", line 31, in generate_gdbinit_rom_add_symbols
+    raise OSError(
+OSError: ESP_ROM_ELF_DIR environment variable is not defined. Please try to run IDF "install" and "export" scripts.
+CMake Warning at C:/esp/v6.0.1/esp-idf/tools/cmake/gdbinit.cmake:52 (message):
+  Error while generating esp_rom gdbinit
+Call Stack (most recent call first):
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:357 (__generate_gdbinit)
+  C:/esp/v6.0.1/esp-idf/tools/cmake/project.cmake:1004 (__project_info)
+  CMakeLists.txt:71 (project)
+
+
+-- Components: bootloader bootloader_support efuse esp_app_format esp_blockdev esp_bootloader_format esp_common esp_hal_ana_conv esp_hal_clock esp_hal_dma esp_hal_gpio esp_hal_gpspi esp_hal_i2s esp_hal_mspi esp_hal_pmu esp_hal_rtc_timer esp_hal_security esp_hal_timg esp_hal_uart esp_hal_usb esp_hal_wdt esp_hw_support esp_libc esp_rom esp_security esp_stdio esp_system esptool_py freertos hal log main micro-ecc partition_table soc spi_flash xtensa
+-- Component paths: C:/esp/v6.0.1/esp-idf/components/bootloader C:/esp/v6.0.1/esp-idf/components/bootloader_support C:/esp/v6.0.1/esp-idf/components/efuse C:/esp/v6.0.1/esp-idf/components/esp_app_format C:/esp/v6.0.1/esp-idf/components/esp_blockdev C:/esp/v6.0.1/esp-idf/components/esp_bootloader_format C:/esp/v6.0.1/esp-idf/components/esp_common C:/esp/v6.0.1/esp-idf/components/esp_hal_ana_conv C:/esp/v6.0.1/esp-idf/components/esp_hal_clock C:/esp/v6.0.1/esp-idf/components/esp_hal_dma C:/esp/v6.0.1/esp-idf/components/esp_hal_gpio C:/esp/v6.0.1/esp-idf/components/esp_hal_gpspi C:/esp/v6.0.1/esp-idf/components/esp_hal_i2s C:/esp/v6.0.1/esp-idf/components/esp_hal_mspi C:/esp/v6.0.1/esp-idf/components/esp_hal_pmu C:/esp/v6.0.1/esp-idf/components/esp_hal_rtc_timer C:/esp/v6.0.1/esp-idf/components/esp_hal_security C:/esp/v6.0.1/esp-idf/components/esp_hal_timg C:/esp/v6.0.1/esp-idf/components/esp_hal_uart C:/esp/v6.0.1/esp-idf/components/esp_hal_usb C:/esp/v6.0.1/esp-idf/components/esp_hal_wdt C:/esp/v6.0.1/esp-idf/components/esp_hw_support C:/esp/v6.0.1/esp-idf/components/esp_libc C:/esp/v6.0.1/esp-idf/components/esp_rom C:/esp/v6.0.1/esp-idf/components/esp_security C:/esp/v6.0.1/esp-idf/components/esp_stdio C:/esp/v6.0.1/esp-idf/components/esp_system C:/esp/v6.0.1/esp-idf/components/esptool_py C:/esp/v6.0.1/esp-idf/components/freertos C:/esp/v6.0.1/esp-idf/components/hal C:/esp/v6.0.1/esp-idf/components/log C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/components/micro-ecc C:/esp/v6.0.1/esp-idf/components/partition_table C:/esp/v6.0.1/esp-idf/components/soc C:/esp/v6.0.1/esp-idf/components/spi_flash C:/esp/v6.0.1/esp-idf/components/xtensa
+-- Adding linker script C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main/ld/esp32/bootloader.ld.in
+--   -> Preprocessing .in script: C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main/ld/esp32/bootloader.ld.in
+-- Configuring done (14.5s)
+-- Generating done (0.8s)
+-- Build files have been written to: C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader
+[129/136] Performing build step for 'bootloader'
+[1/31] Generating project_elf_src_esp32.c
+[2/31] Preprocessing linker script C:/esp/v6.0.1/esp-idf/components/bootloader/subproject/main/ld/esp32/bootloader.ld.in -> C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/ld/bootloader.ld
+[3/31] Linking C static library esp-idf\log\liblog.a
+[4/31] Building C object CMakeFiles/bootloader.elf.dir/project_elf_src_esp32.c.obj
+[5/31] Linking C static library esp-idf\esp_rom\libesp_rom.a
+[6/31] Linking C static library esp-idf\esp_common\libesp_common.a
+[7/31] Linking C static library esp-idf\esp_hw_support\libesp_hw_support.a
+[8/31] Linking C static library esp-idf\esp_system\libesp_system.a
+[9/31] Linking C static library esp-idf\efuse\libefuse.a
+[10/31] Linking C static library esp-idf\bootloader_support\libbootloader_support.a
+[11/31] Linking C static library esp-idf\esp_security\libesp_security.a
+[12/31] Linking C static library esp-idf\esp_hal_security\libesp_hal_security.a
+[13/31] Linking C static library esp-idf\esp_hal_ana_conv\libesp_hal_ana_conv.a
+[14/31] Linking C static library esp-idf\esp_hal_i2s\libesp_hal_i2s.a
+[15/31] Linking C static library esp-idf\esp_hal_uart\libesp_hal_uart.a
+[16/31] Linking C static library esp-idf\esp_hal_wdt\libesp_hal_wdt.a
+[17/31] Linking C static library esp-idf\esp_hal_timg\libesp_hal_timg.a
+[18/31] Linking C static library esp-idf\micro-ecc\libmicro-ecc.a
+[19/31] Linking C static library esp-idf\esp_bootloader_format\libesp_bootloader_format.a
+[20/31] Linking C static library esp-idf\spi_flash\libspi_flash.a
+[21/31] Linking C static library esp-idf\esp_hal_clock\libesp_hal_clock.a
+[22/31] Linking C static library esp-idf\esp_hal_gpspi\libesp_hal_gpspi.a
+[23/31] Linking C static library esp-idf\esp_hal_pmu\libesp_hal_pmu.a
+[24/31] Linking C static library esp-idf\esp_hal_gpio\libesp_hal_gpio.a
+[25/31] Linking C static library esp-idf\hal\libhal.a
+[26/31] Linking C static library esp-idf\soc\libsoc.a
+[27/31] Linking C static library esp-idf\xtensa\libxtensa.a
+[28/31] Linking C static library esp-idf\main\libmain.a
+[29/31] Linking C executable bootloader.elf
+[30/31] Generating binary image from built executable
+esptool v5.3.dev3
+Creating ESP32 image...
+Merged 2 ELF sections.
+Successfully created ESP32 image.
+Generated C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/bootloader.bin
+[31/31] C:\WINDOWS\system32\cmd.exe /C "cd /D "C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build\bootloader" && C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x1000 "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/bootloader.bin""
+Bootloader binary size 0x6610 bytes. 0x9f0 bytes (9%) free.
+[130/136] No install step for 'bootloader'
+[131/136] Completed 'bootloader'
+[132/136] Generating esp-idf/esp_system/ld/sections.ld
+[133/136] Building C object CMakeFiles/tractor_telematics.elf.dir/project_elf_src_esp32.c.obj
+[134/136] Linking CXX executable tractor_telematics.elf
+[135/136] Generating binary image from built executable
+esptool v5.3.dev3
+Creating ESP32 image...
+Merged 3 ELF sections.
+Successfully created ESP32 image.
+Generated C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/tractor_telematics.bin
+[136/136] C:\WINDOWS\system32\cmd.exe /C "cd /D "C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build" && C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe C:/esp/v6.0.1/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/partition_table/partition-table.bin" "C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/tractor_telematics.bin""
+tractor_telematics.bin binary size 0x881d0 bytes. Smallest app partition is 0x100000 bytes. 0x77e30 bytes (47%) free.

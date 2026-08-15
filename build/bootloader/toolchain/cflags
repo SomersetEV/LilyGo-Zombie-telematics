@@ -1,0 +1,6 @@
+"-specs=C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/bootloader/specs/picolibc.specs"
+-Wno-frame-address
+-mlongcalls
+-fno-builtin-memcpy
+-fno-builtin-memset
+-fno-builtin-bzero

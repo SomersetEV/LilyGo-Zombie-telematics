@@ -23,7 +23,7 @@
 
  * Automatically generated file. DO NOT EDIT.
 
- * Espressif IoT Development Framework (ESP-IDF) 5.5.2 Configuration Header
+ * Espressif IoT Development Framework (ESP-IDF) 6.0.1 Configuration Header
 
  */
        
@@ -34,6 +34,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 /* CPU instruction prefetch padding size for flash mmap scenario */
+/* Copy from esp_secure_boot.h */
 /*
  * PMP region granularity size
  * Software may determine the PMP granularity by writing zero to pmp0cfg, then writing all ones
@@ -75,6 +76,59 @@ MEMORY
   /* Flash mapped constant data */
   drom0_0_seg (R) : org = 0x3F400020, len = 0x400000-0x20
   /* (See iram0_2_seg for meaning of 0x20 offset in the above.) */
+/**
+ *  RTC Memory Layout for ESP32
+ *
+ *  ESP32 has two separate RTC memory regions:
+ *  1. RTC FAST Memory: 8KB, accessible by PRO_CPU only
+ *  2. RTC SLOW Memory: 8KB, accessible by both CPUs and ULP coprocessor
+ *
+ *  ==================== RTC FAST Memory ====================
+ *  Size: 8KB (0x2000)
+ *  IRAM View: 0x400C0000 - 0x400C2000 (executable)
+ *  DRAM View: 0x3FF80000 - 0x3FF82000 (data access)
+ *
+ *  +-----------------------------+ 0x400C2000 / 0x3FF82000 (RTC FAST memory end)
+ *  |   rtc_fast_reserved_seg     |
+ *  | (ESP_BOOTLOADER_RESERVE_RTC)|
+ *  |- - - - - - - - - - - - - - -|
+ *  | bootloader_data_rtc_mem     | s_bootloader_retain_mem
+ *  +-----------------------------+ 0x400C2000 - ESP_BOOTLOADER_RESERVE_RTC
+ *  |     rtc_iram_seg /          |
+ *  |     rtc_data_seg            |
+ *  | .rtc.text                   | RTC wake stub code
+ *  |- - - - - - - - - - - - - - -|
+ *  | .rtc.data / .rtc.rodata     | (when CONFIG_ESP32_RTCDATA_IN_FAST_MEM)
+ *  |- - - - - - - - - - - - - - -|
+ *  | .rtc.bss                    |
+ *  +-----------------------------+ 0x400C0000 / 0x3FF80000 (RTC FAST memory start)
+ *
+ *  ==================== RTC SLOW Memory ====================
+ *  Size: 8KB (0x2000)
+ *  Address: 0x50000000 - 0x50002000
+ *
+ *  +-----------------------------+ 0x50002000 (RTC SLOW memory end)
+ *  |   rtc_slow_reserved_seg     |
+ *  |    (RESERVE_RTC_MEM = 24)   |
+ *  |- - - - - - - - - - - - - - -|
+ *  | rtc_timer_data_in_rtc_mem   | s_rtc_timer_retain_mem (24 bytes)
+ *  | (RTC_TIMER_RESERVE_RTC)     |
+ *  +-----------------------------+ 0x50002000 - RESERVE_RTC_MEM
+ *  |      rtc_slow_seg           |
+ *  |- - - - - - - - - - - - - - -|
+ *  | .rtc.data / .rtc.rodata     | (when !CONFIG_ESP32_RTCDATA_IN_FAST_MEM)
+ *  | .rtc.bss                    |
+ *  +-----------------------------+ 0x50000000 + CONFIG_ULP_COPROC_RESERVE_MEM (if ULP enabled)
+ *  | ULP Coprocessor Reserve     | (Optional, CONFIG_ULP_COPROC_RESERVE_MEM)
+ *  | (code + data)               |
+ *  +-----------------------------+ 0x50000000 (RTC SLOW memory start)
+ *
+ *  ESP_BOOTLOADER_RESERVE_RTC = ALIGN_UP(CONFIG_BOOTLOADER_RESERVE_RTC_SIZE, 8)
+ *  RESERVE_RTC_MEM = RTC_TIMER_RESERVE_RTC (24 bytes) for ESP32
+ *
+ *  Note: RTC data can be placed in either FAST or SLOW memory based on
+ *        CONFIG_ESP32_RTCDATA_IN_FAST_MEM configuration option.
+ */
   /* RTC fast memory (executable). Persists over deep sleep. */
   rtc_iram_seg(RWX) : org = 0x400C0000, len = 0x2000 - 0
   /* RTC fast memory (same block as above, rtc_iram_seg), viewed from data bus */
@@ -99,14 +153,13 @@ MEMORY
   */
   rtc_slow_reserved_seg(RW) : org = 0x50000000 + 0x2000 - ((24)), len = ((24))
   /* external memory */
-  extern_ram_seg(RWX) : org = 0x3F800000,
+  extern_ram_seg(RW) : org = 0x3F800000,
                                      len = 0x400000
 }
 _heap_start = _heap_low_start;
 _sram1_iram_start = 0x400A0000;
 _sram1_iram_len = ( _iram_end > _sram1_iram_start) ? (_iram_end - _sram1_iram_start) : 0;
 _heap_end = ALIGN(0x40000000 - _sram1_iram_len - 3, 4);
-_data_seg_org = ORIGIN(rtc_data_seg);
 /* The lines below define location alias for .rtc.data section based on Kconfig option.
    When the option is not defined then use slow memory segment
    else the data will be placed in fast memory segment */

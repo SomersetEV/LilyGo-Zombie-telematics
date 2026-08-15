@@ -1,33 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch",
-      "Bash(ls ~/esp/v5.5.2/ | head -20; echo \"=== v5.4.2 ===\"; ls ~/esp/v5.4.2/ | head -20; echo \"=== export scripts ===\"; ls ~/esp/v5.5.2/export.ps1 ~/esp/v5.5.2/esp-idf/export.ps1 2>&1)",
-      "Read(//c/Users/benay/esp/v5.5.2/**)",
-      "Read(//c/Users/benay/esp/v5.4.2/**)",
-      "PowerShell($env:IDF_PATH = \"C:\\\\Users\\\\benay\\\\esp\\\\v5.5.2\"; if \\(Test-Path \"$env:IDF_PATH\\\\export.ps1\"\\) { Write-Output \"export.ps1 found\" }; Get-ChildItem \"C:\\\\Users\\\\benay\\\\.espressif\\\\python_env\" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)",
-      "PowerShell(idf.py --version)",
-      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\benay\\\\.espressif\\\\tools\" -ErrorAction SilentlyContinue | ForEach-Object { $v = \\(Get-ChildItem $_.FullName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name\\) -join \", \"; \"$\\($_.Name\\): $v\" })",
-      "Read(//c/Users/benay/OneDrive/Documents/github/Telematics-Phone-app/lib/services/**)",
-      "Read(//c/Users/benay/OneDrive/Documents/github/Telematics-Phone-app/**)",
-      "Read(//c/Users/benay/OneDrive/Documents/github/Telematics-Phone-app/android/app/src/main/**)",
-      "Bash(cd \"c:/Users/benay/OneDrive/Documents/github/Telematics-Phone-app/ios\" && ls Runner/Info.plist && grep -n \"NSBluetooth\\\\|NSLocation\\\\|<key>\" Runner/Info.plist | head -30)",
-      "Read(//c/Users/benay/OneDrive/Documents/Arduino/rearmotor/ElectricLeyland255/Dashboard/Runner/**)",
-      "Read(//c/Users/benay/OneDrive/Documents/github/Telematics-Phone-app/ios/Runner/**)",
-      "Bash(cd \"c:/Users/benay/OneDrive/Documents/github/Telematics-Phone-app\" && grep -n \"void dispose\\\\|@override\" lib/services/ble_service.dart | head)",
-      "Read(//c/Users/benay/flutter/bin/**)",
-      "Read(//c/flutter/bin/**)",
-      "Read(//c/src/flutter/bin/**)",
-      "Read(//c/Users/benay/**)",
-      "Bash(where.exe dart *)",
-      "Bash(cd \"c:/Users/benay/OneDrive/Documents/github/Telematics-Phone-app\" && cat analysis_options.yaml)"
-    ],
-    "additionalDirectories": [
-      "c:\\Users\\benay\\OneDrive\\Documents\\Arduino\\rearmotor\\ElectricLeyland255\\Dashboard\\Leyland_255_Nextion_dash.ino",
-      "c:\\Users\\benay\\OneDrive\\Documents\\Arduino\\rearmotor\\ElectricLeyland255\\Dashboard",
-      "c:\\Users\\benay\\OneDrive\\Documents\\github\\Telematics-Phone-app",
-      "c:\\Users\\benay\\OneDrive\\Documents\\github\\Telematics-Phone-app\\ios\\Runner",
-      "c:\\Users\\benay\\OneDrive\\Documents\\github\\Telematics-Phone-app\\lib\\services"
+      "WebSearch"
     ]
   }
 }
