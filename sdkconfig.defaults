@@ -1,6 +1,10 @@
 # Target
 CONFIG_IDF_TARGET="esp32"
 
+# Partition table — custom (adds a spiffs partition for web-interface assets)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
 # Bluetooth — NimBLE only (classic BT off to save memory)
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y

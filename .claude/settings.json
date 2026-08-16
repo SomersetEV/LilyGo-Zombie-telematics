@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/esp/v6.0.1/esp-idf/components/hal/include/**)",
+      "Read(//c/esp/v6.0.1/esp-idf/components/hal/**)",
+      "Read(//c/esp/v6.0.1/esp-idf/components/**)",
+      "Read(//c/esp/v6.0.1/esp-idf/components/esp_hal_twai/include/hal/**)",
+      "Bash(find \"C:/esp/v6.0.1/esp-idf/components\" -maxdepth 1 -iname \"*json*\")",
+      "Bash(find / -maxdepth 6 -iname \"cJSON.h\" 2>/dev/null | head -5 *)",
+      "Read(//c//**)",
+      "Read(//c/Users/**)"
+    ]
+  }
+}

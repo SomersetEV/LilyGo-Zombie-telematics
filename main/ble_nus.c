@@ -20,8 +20,10 @@
 #include "vehicle_state.h"
 #include "sd_logger.h"
 #include "can_handler.h"
+#include "web_interface.h"
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -312,6 +314,35 @@ static void handle_status_command(void)
     nus_notify_str(buf);
 }
 
+static void handle_wifi_mode_command(void)
+{
+    /*
+     * Switch the device into web-interface (bench/service) mode.
+     * We can't safely bring up WiFi/HTTP and a transmit-capable TWAI node
+     * in the same session as the listen-only logging pipeline, so we
+     * persist the choice to NVS and reboot — app_main() reads it back on
+     * the next boot and starts the web-interface task set instead.
+     */
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        nus_notify_str("ERR nvs\n");
+        return;
+    }
+    nvs_set_u8(nvs, NVS_KEY_BOOT_MODE, BOOT_MODE_WEB_INTERFACE);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+
+    char reply[96];
+    snprintf(reply, sizeof(reply), "WIFI_MODE ssid=%s pass=%s\n",
+             WEB_INTERFACE_AP_SSID, WEB_INTERFACE_AP_PASS);
+    nus_notify_str(reply);
+    ESP_LOGI(TAG, "Entering web-interface mode, rebooting...");
+
+    vTaskDelay(pdMS_TO_TICKS(200));  // give the notification time to go out
+    esp_restart();
+}
+
 static void handle_summary_command(uint32_t session_id)
 {
     /*
@@ -381,7 +412,9 @@ static void handle_summary_command(uint32_t session_id)
 
 static void dispatch_command(const char *cmd, uint16_t len)
 {
-    g_app_mode = APP_MODE_TELEMATICS;
+    if (g_app_mode != APP_MODE_WEB_INTERFACE) {
+        g_app_mode = APP_MODE_TELEMATICS;
+    }
     uint32_t arg;
     if      (strncmp(cmd, "LIST", 4) == 0)              { handle_list_command();                    }
     else if (sscanf(cmd, "SUMMARY %lu", &arg) == 1)    { handle_summary_command(arg);              }
@@ -391,6 +424,7 @@ static void dispatch_command(const char *cmd, uint16_t len)
     else if (strncmp(cmd, "TRIP_START", 10) == 0)      { handle_trip_marker(LOG_MSG_TRIP_START);   }
     else if (strncmp(cmd, "TRIP_END",   8) == 0)       { handle_trip_marker(LOG_MSG_TRIP_END);     }
     else if (strncmp(cmd, "STATUS",     6) == 0)       { handle_status_command();                  }
+    else if (strncmp(cmd, "WIFI_MODE",  9) == 0)       { handle_wifi_mode_command();                }
     else {
         ESP_LOGW(TAG, "Unknown cmd: %.*s", len, cmd);
         nus_notify_str("ERR unknown_cmd\n");
@@ -476,7 +510,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             conn_handle       = event->connect.conn_handle;
             negotiated_mtu    = DEFAULT_CHUNK_SIZE + 3;
-            g_app_mode        = APP_MODE_DETECTING;
+            // In web-interface mode there's no Telematics/Speedo detection —
+            // stay in APP_MODE_WEB_INTERFACE so command dispatch keeps working.
+            if (g_app_mode != APP_MODE_WEB_INTERFACE) {
+                g_app_mode = APP_MODE_DETECTING;
+            }
             s_connect_time_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
             ESP_LOGI(TAG, "Phone connected — handle=%d", conn_handle);
         } else {
@@ -487,7 +525,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         conn_handle       = BLE_HS_CONN_HANDLE_NONE;
-        g_app_mode        = APP_MODE_DETECTING;
+        // Web-interface mode persists across BLE disconnect — the user may now
+        // be driving the web UI from a browser instead of the phone app.
+        if (g_app_mode != APP_MODE_WEB_INTERFACE) {
+            g_app_mode = APP_MODE_DETECTING;
+        }
         s_connect_time_ms = 0;
         if (g_ble_live_queue) {
             raw_can_log_t tmp;
@@ -647,12 +689,13 @@ void ble_nus_task(void *pvParameters)
                     buf_len += line_len;
                 }
                 if (!disconnected && buf_len > 0) nus_notify(buf, (uint16_t)buf_len);
-            } else {
+            } else if (g_app_mode == APP_MODE_TELEMATICS) {
                 // Telematics mode: periodic CAN activity heartbeat
                 char buf[32];
                 snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
                 nus_notify_str(buf);
             }
+            // APP_MODE_WEB_INTERFACE: no periodic heartbeat — command/reply only
         }
     }
 }

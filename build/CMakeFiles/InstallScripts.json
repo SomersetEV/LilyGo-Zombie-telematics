@@ -157,6 +157,7 @@
 		"C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/rt/cmake_install.cmake",
 		"C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/spiffs/cmake_install.cmake",
 		"C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/ulp/cmake_install.cmake",
+		"C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/cmake_install.cmake",
 		"C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/cmake_install.cmake"
 	],
 	"Parallel" : false

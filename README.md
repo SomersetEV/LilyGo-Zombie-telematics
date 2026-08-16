@@ -44,6 +44,28 @@ The device advertises as `SomersetEV-Tractor`. The phone app communicates over N
 | `TIME <unix>` | Set RTC offset from phone clock |
 | `TRIP_START` | Insert trip start marker |
 | `TRIP_END` | Insert trip end marker with summary |
+| `WIFI_MODE` | Switch to web interface mode (see below) — replies `WIFI_MODE ssid=... pass=...`, then reboots |
+
+## Web Interface Mode
+
+For bench/service use — configuring the Zombieverter inverter's parameters, CAN mapping, or firmware
+over WiFi, without needing to re-flash the ESP32. Ported from the
+[openinverter esp32-web-interface](https://github.com/jsphuebner/esp32-web-interface) project.
+
+Sending `WIFI_MODE` over BLE switches the device out of logging mode and into web interface mode:
+
+1. Connect via the phone app and tap "Configure Inverter (WiFi)".
+2. The device replies with AP credentials, then reboots into web interface mode.
+3. Connect a laptop or phone to the reported WiFi AP (default `SomersetEV-Inverter`, also reachable at
+   `http://inverter.local/` or `http://192.168.4.1/`).
+4. Use the browser UI to read/write inverter parameters, configure CAN signal mapping, and push
+   firmware updates to the inverter over CAN.
+5. Reboot the device (via the web UI's Reboot button, or power-cycle) to return to normal logging mode.
+
+Web interface mode and logging mode are mutually exclusive within a single boot — the CAN bus is
+reconfigured from listen-only (safe for driving) to transmit-capable (required for parameter writes
+and firmware updates) only in web interface mode, and BLE trip logging/sync is unavailable while it's
+active.
 
 ## Built With
 

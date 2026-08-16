@@ -1,0 +1,7 @@
+Command: cmake -G Ninja -B C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics\build -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Users\benay\.espressif\python_env\idf6.0_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DCCACHE_ENABLE=True C:\Users\benay\Documents\GitHub\LilyGo Zombie telematics
+-- Component directory C:/esp/v6.0.1/esp-idf/components/mqtt does not contain a CMakeLists.txt file. No component will be added
+-- Minimal build - OFF
+-- ccache will be used for faster recompilation
+-- Building ESP-IDF components for target esp32
+-- ESP-TEE is currently supported only on the esp32c6;esp32h2;esp32c5;esp32c61 SoCs
+-- Configuring incomplete, errors occurred!

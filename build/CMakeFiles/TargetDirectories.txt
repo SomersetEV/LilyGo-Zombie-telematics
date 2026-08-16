@@ -1090,7 +1090,17 @@ C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/ulp/CMake
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/ulp/CMakeFiles/install.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/ulp/CMakeFiles/install/local.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/ulp/CMakeFiles/install/strip.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/__idf_espressif__mdns.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/edit_cache.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/rebuild_cache.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/list_install_components.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/install.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/install/local.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/espressif__mdns/CMakeFiles/install/strip.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/__idf_main.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/spiffs_spiffs_bin.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/spiffs-flash.dir
+C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/encrypted-spiffs-flash.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/edit_cache.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
 C:/Users/benay/Documents/GitHub/LilyGo Zombie telematics/build/esp-idf/main/CMakeFiles/list_install_components.dir

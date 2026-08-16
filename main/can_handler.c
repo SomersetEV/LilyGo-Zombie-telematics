@@ -11,10 +11,6 @@
 
 static const char *TAG = "CAN";
 
-// ── LILYGO T-CAN485 pin assignments ─────────────────────────────────────────
-#define CAN_TX_PIN  GPIO_NUM_27
-#define CAN_RX_PIN  GPIO_NUM_26
-
 // ── M3 BMS CAN IDs (SomersetEV/Tesla-M3-Bms-Software CAN_Common.cpp) ────────
 #define CAN_ID_BMS_SOC      0x355   // SoC / SoH
 #define CAN_ID_BMS_PACK     0x356   // Pack voltage, current, temp max
@@ -50,6 +46,30 @@ static twai_node_handle_t s_node        = NULL;
 static QueueHandle_t      s_rx_queue    = NULL;
 static QueueHandle_t      s_log_queue   = NULL;  // shared with sd_logger
 static volatile uint32_t  s_frame_count = 0;
+
+// ── TWAI bring-up ─────────────────────────────────────────────────────────────
+// Listen-only: used by the logging pipeline (can_rx_task, below). The
+// web-interface pipeline's CANopen/SDO client (oi_can.c) brings up its own
+// transmit-capable node instead — the two pipelines never run in the same
+// boot session (see ble_nus.h boot_mode_t / main.c).
+esp_err_t can_handler_init_listen_only(twai_node_handle_t *out_node)
+{
+    twai_onchip_node_config_t node_cfg = {
+        .io_cfg = {
+            .tx = CAN_TX_PIN,
+            .rx = CAN_RX_PIN,
+            .quanta_clk_out   = -1,
+            .bus_off_indicator = -1,
+        },
+        .bit_timing = { .bitrate = 500000 },
+        .flags = { .enable_listen_only = 1 },
+    };
+    esp_err_t err = twai_new_node_onchip(&node_cfg, out_node);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "TWAI node created, 500kbps listen-only");
+    }
+    return err;
+}
 
 // ── ISR callback — called when a CAN frame arrives ───────────────────────────
 static bool IRAM_ATTR twai_rx_done_cb(twai_node_handle_t handle,
@@ -183,18 +203,7 @@ void can_rx_task(void *pvParameters)
     s_rx_queue = xQueueCreate(256, sizeof(raw_frame_t));
     configASSERT(s_rx_queue);
 
-    twai_onchip_node_config_t node_cfg = {
-        .io_cfg = {
-            .tx = CAN_TX_PIN,
-            .rx = CAN_RX_PIN,
-            .quanta_clk_out   = -1,
-            .bus_off_indicator = -1,
-        },
-        .bit_timing = { .bitrate = 500000 },
-        .flags = { .enable_listen_only = 1 },
-    };
-
-    ESP_ERROR_CHECK(twai_new_node_onchip(&node_cfg, &s_node));
+    ESP_ERROR_CHECK(can_handler_init_listen_only(&s_node));
 
     twai_event_callbacks_t cbs = { .on_rx_done = twai_rx_done_cb };
     ESP_ERROR_CHECK(twai_node_register_event_callbacks(s_node, &cbs, NULL));
