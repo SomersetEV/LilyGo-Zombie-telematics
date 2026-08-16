@@ -27,6 +27,14 @@ static const char *TAG = "WEBIF";
 #define SPIFFS_MOUNT_POINT "/spiffs"
 #define MDNS_HOSTNAME       "inverter"
 
+// Node ID / CAN speed chosen on the web interface, persisted so they survive a
+// reboot (same "telematics" namespace as sd_logger.c and ble_nus.c).
+#define NVS_NAMESPACE       "telematics"
+#define NVS_KEY_NODE_ID     "oi_node_id"
+#define NVS_KEY_CAN_SPEED   "oi_can_speed"
+#define DEFAULT_NODE_ID     20
+#define DEFAULT_CAN_BAUD    OI_BAUD_500K
+
 // ── content-type helper (mirrors getContentType() in esp32-web-interface.ino) ─
 
 static const char *content_type_for(const char *path)
@@ -387,12 +395,28 @@ static esp_err_t nodeid_get_handler(httpd_req_t *req)
     char id_s[8], speed_s[8];
     if (query_arg(req, "id", id_s, sizeof(id_s))) {
         int id = atoi(id_s);
-        oi_baud_t baud = OI_BAUD_500K;
+        if (id < 1 || id > 63) id = DEFAULT_NODE_ID;
+
+        // Keep the current speed unless the request explicitly names one, so
+        // that changing only the node ID doesn't silently reset the baud rate.
+        oi_baud_t baud = oi_can_get_baud_rate();
         if (query_arg(req, "canspeed", speed_s, sizeof(speed_s))) {
             int speed = atoi(speed_s);
             baud = speed == 0 ? OI_BAUD_125K : (speed == 1 ? OI_BAUD_250K : OI_BAUD_500K);
         }
-        oi_can_init((uint8_t)id, baud);
+
+        if (oi_can_init((uint8_t)id, baud) == ESP_OK) {
+            nvs_handle_t nvs;
+            if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+                nvs_set_u8(nvs, NVS_KEY_NODE_ID,   (uint8_t)id);
+                nvs_set_u8(nvs, NVS_KEY_CAN_SPEED, (uint8_t)baud);
+                nvs_commit(nvs);
+                nvs_close(nvs);
+            }
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "CAN init failed");
+            return ESP_OK;
+        }
     }
     char resp[16];
     snprintf(resp, sizeof(resp), "%d,%d", oi_can_get_node_id(), oi_can_get_baud_rate());
@@ -520,7 +544,18 @@ esp_err_t web_interface_start(void)
     err = start_http_server();
     if (err != ESP_OK) return err;
 
-    oi_can_init(1, OI_BAUD_500K);
+    uint8_t node_id = DEFAULT_NODE_ID;
+    uint8_t baud    = DEFAULT_CAN_BAUD;
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, NVS_KEY_NODE_ID,   &node_id);   // left untouched if absent
+        nvs_get_u8(nvs, NVS_KEY_CAN_SPEED, &baud);
+        nvs_close(nvs);
+    }
+    if (node_id < 1 || node_id > 63)  node_id = DEFAULT_NODE_ID;
+    if (baud > OI_BAUD_500K)          baud    = DEFAULT_CAN_BAUD;
+
+    oi_can_init(node_id, (oi_baud_t)baud);
 
     return ESP_OK;
 }

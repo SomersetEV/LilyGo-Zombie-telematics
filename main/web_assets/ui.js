@@ -227,8 +227,15 @@ var ui = {
 
     xmlhttp.onload = function()
     {
+        if (this.status != 200) {
+            document.getElementById("message").innerHTML = "Failed to set node ID / CAN speed: " + this.responseText;
+            ui.getNodeId();
+            return;
+        }
         document.getElementById("nodeid").value = this.responseText.split(',')[0];
         document.getElementById("canspeed").value = this.responseText.split(',')[1];
+        // Re-read the inverter over the newly configured link.
+        ui.updateTables();
     }
 
     xmlhttp.open("GET", "/nodeid?id=" + document.getElementById("nodeid").value + "&canspeed=" + document.getElementById("canspeed").value, true);

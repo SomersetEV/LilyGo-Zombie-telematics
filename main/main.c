@@ -74,7 +74,9 @@ static void web_interface_poll_task(void *pvParameters)
     (void)pvParameters;
     while (1) {
         oi_can_loop();
-        vTaskDelay(pdMS_TO_TICKS(5));
+        // At least 1 tick — pdMS_TO_TICKS(5) is 0 at the 100Hz tick rate,
+        // which busy-loops this task and starves IDLE1 (task_wdt trips).
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 

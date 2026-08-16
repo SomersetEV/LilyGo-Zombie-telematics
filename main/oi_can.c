@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_twai_onchip.h"
 #include "esp_twai.h"
@@ -383,7 +384,12 @@ static void handle_update(const oi_frame_t *rx)
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-esp_err_t oi_can_init(uint8_t node_id, oi_baud_t baud)
+// Actual init body. Must run on core 1: twai_new_node_onchip() allocates its
+// CPU interrupt on the calling core, and core 0's low/med interrupt slots are
+// exhausted by WiFi + BLE in web-interface mode (alloc fails with NOT_FOUND).
+// Node delete/re-create must also happen on the allocating core, so re-inits
+// go through the same core-1 path.
+static esp_err_t oi_can_init_on_this_core(uint8_t node_id, oi_baud_t baud)
 {
     gpio_set_direction(OI_CAN_TRANSCEIVER_STANDBY_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(OI_CAN_TRANSCEIVER_STANDBY_PIN, 0);
@@ -406,7 +412,12 @@ esp_err_t oi_can_init(uint8_t node_id, oi_baud_t baud)
             .bus_off_indicator = -1,
         },
         .bit_timing = { .bitrate = bitrate },
-        .flags = { .enable_listen_only = 0 },  // transmit-capable, unlike the logging pipeline
+        // Transmit-capable (unlike the logging pipeline's listen-only node), so
+        // the driver requires tx_queue_depth >= 1 — without it creation fails
+        // with ESP_ERR_INVALID_ARG. SDO traffic is one outstanding request at a
+        // time, so a shallow queue is plenty.
+        .tx_queue_depth = 8,
+        .flags = { .enable_listen_only = 0 },
     };
     esp_err_t err = twai_new_node_onchip(&node_cfg, &s_node);
     if (err != ESP_OK) {
@@ -425,6 +436,45 @@ esp_err_t oi_can_init(uint8_t node_id, oi_baud_t baud)
     ESP_LOGI(TAG, "CAN initialized (node %u, %lu bps, transmit-capable)",
              node_id, (unsigned long)bitrate);
     return ESP_OK;
+}
+
+typedef struct {
+    uint8_t           node_id;
+    oi_baud_t         baud;
+    esp_err_t         result;
+    SemaphoreHandle_t done;
+} init_req_t;
+
+static void oi_can_init_task(void *arg)
+{
+    init_req_t *req = (init_req_t *)arg;
+    req->result = oi_can_init_on_this_core(req->node_id, req->baud);
+    xSemaphoreGive(req->done);
+    vTaskDelete(NULL);
+}
+
+esp_err_t oi_can_init(uint8_t node_id, oi_baud_t baud)
+{
+    if (xPortGetCoreID() == 1) {
+        return oi_can_init_on_this_core(node_id, baud);
+    }
+    // Marshal onto a core-1 task (callers run on core 0: app_main at startup,
+    // httpd task on a /nodeid settings change).
+    init_req_t req = {
+        .node_id = node_id,
+        .baud    = baud,
+        .result  = ESP_FAIL,
+        .done    = xSemaphoreCreateBinary(),
+    };
+    if (!req.done) return ESP_ERR_NO_MEM;
+    if (xTaskCreatePinnedToCore(oi_can_init_task, "oi_can_init", 4096,
+                                &req, 10, NULL, 1) != pdPASS) {
+        vSemaphoreDelete(req.done);
+        return ESP_ERR_NO_MEM;
+    }
+    xSemaphoreTake(req.done, portMAX_DELAY);
+    vSemaphoreDelete(req.done);
+    return req.result;
 }
 
 void oi_can_deinit(void)
