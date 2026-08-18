@@ -33,6 +33,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_att.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
@@ -48,7 +49,11 @@ static const char *TAG        = "BLE";
 #define MOUNT_POINT             "/sdcard"
 #define NVS_NAMESPACE           "telematics"
 #define NVS_KEY_LAST_SYNCED     "last_synced"
-#define CMD_QUEUE_DEPTH         8
+// Deep enough to absorb a burst of phone traffic while a multi-second GET holds
+// the command processor. Anything that reaches the queue must survive — a dropped
+// DONE strands the session and it re-syncs forever.
+#define CMD_QUEUE_DEPTH         16
+#define CMD_ENQUEUE_WAIT_MS     10
 #define CMD_MAX_LEN             32
 
 // ── BLE chunk sizing ─────────────────────────────────────────────────────────
@@ -80,6 +85,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg);
 static uint16_t      nus_tx_handle  = 0;
 static uint16_t      conn_handle    = BLE_HS_CONN_HANDLE_NONE;
 static volatile uint16_t negotiated_mtu = DEFAULT_CHUNK_SIZE + 3;
+// Written from the NimBLE host task, read from the command processor — diagnostic only
+static volatile uint32_t s_spd_frames = 0;
 static QueueHandle_t cmd_queue      = NULL;
 static QueueHandle_t log_queue      = NULL;  // shared with CAN and SD tasks
 
@@ -94,10 +101,17 @@ typedef struct {
 
 // ── Notification helper ──────────────────────────────────────────────────────
 
-static int nus_notify(const void *data, uint16_t len)
+// Usable notification payload for the current connection (ATT_MTU minus 3 bytes
+// of ATT opcode + handle). Anything longer is silently truncated by NimBLE.
+static uint16_t nus_payload_size(void)
 {
-    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) return -1;
+    uint16_t mtu = negotiated_mtu;
+    uint16_t sz  = (mtu > 3) ? (uint16_t)(mtu - 3) : DEFAULT_CHUNK_SIZE;
+    return (sz > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : sz;
+}
 
+static int nus_notify_one(const void *data, uint16_t len)
+{
     struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
     if (!om) {
         ESP_LOGE(TAG, "mbuf alloc failed");
@@ -108,6 +122,38 @@ static int nus_notify(const void *data, uint16_t len)
         ESP_LOGW(TAG, "notify failed: %d", rc);
     }
     return rc;
+}
+
+/*
+ * Send `len` bytes, splitting across as many notifications as the negotiated MTU
+ * requires. Without this, anything longer than ATT_MTU-3 is truncated with no
+ * error — which silently mangles LIST (up to 512B) and every JOB line whenever
+ * MTU negotiation hasn't landed, leaving negotiated_mtu at its 23-byte default.
+ *
+ * Splitting is safe because the phone reassembles the notification stream and
+ * splits on '\n' rather than assuming one notification per message.
+ */
+static int nus_notify(const void *data, uint16_t len)
+{
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) return -1;
+
+    const uint8_t *p        = (const uint8_t *)data;
+    uint16_t       chunk_sz = nus_payload_size();
+    uint16_t       sent     = 0;
+
+    while (sent < len) {
+        uint16_t n = len - sent;
+        if (n > chunk_sz) n = chunk_sz;
+
+        int rc = nus_notify_one(p + sent, n);
+        if (rc != 0) return rc;
+        sent += n;
+
+        // Only pace when we actually had to split — a single-chunk send (the
+        // common case, and every chunk of a GET) pays no extra latency.
+        if (sent < len) vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return 0;
 }
 
 static int nus_notify_str(const char *str)
@@ -211,8 +257,7 @@ static void handle_get_command(uint32_t session_id)
     }
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    uint16_t chunk_size = (negotiated_mtu > 3) ? (negotiated_mtu - 3) : DEFAULT_CHUNK_SIZE;
-    if (chunk_size > MAX_CHUNK_SIZE) chunk_size = MAX_CHUNK_SIZE;
+    uint16_t chunk_size = nus_payload_size();
 
     uint8_t  buf[MAX_CHUNK_SIZE];
     size_t   bytes_read;
@@ -452,7 +497,26 @@ static int nus_rx_access_cb(uint16_t conn_hdl, uint16_t attr_handle,
         cmd.text[--cmd.len] = '\0';
     }
 
-    if (xQueueSend(cmd_queue, &cmd, 0) != pdTRUE) {
+    /*
+     * SPD is consumed here and never reaches cmd_queue.
+     *
+     * The phone streams `SPD <centi_mph> <fix>` at 5Hz for the whole connection.
+     * Queueing those would fill CMD_QUEUE_DEPTH within ~2s of a GET (which blocks
+     * the command processor for the length of the transfer) and drop the DONE that
+     * follows it — leaving last_synced unadvanced and the session re-downloading
+     * forever. It would also emit one ERR unknown_cmd per frame once the queue
+     * drained, which the phone mistakes for a command reply.
+     *
+     * Handling it in the GATT callback also deliberately leaves g_app_mode alone,
+     * so a speed stream on its own never claims Telematics mode.
+     */
+    if (strncmp(cmd.text, "SPD", 3) == 0 &&
+        (cmd.text[3] == ' ' || cmd.text[3] == '\0')) {
+        s_spd_frames++;
+        return 0;
+    }
+
+    if (xQueueSend(cmd_queue, &cmd, pdMS_TO_TICKS(CMD_ENQUEUE_WAIT_MS)) != pdTRUE) {
         ESP_LOGW(TAG, "Command queue full — dropped: %s", cmd.text);
     }
     return 0;
@@ -633,6 +697,11 @@ void ble_nus_task(void *pvParameters)
     ble_svc_gatt_init();
     ble_svc_gap_device_name_set(DEVICE_NAME);
 
+    // Advertise the largest MTU we can serve, so a client that offers 517 settles
+    // on 512 rather than us capping it low. negotiated_mtu still governs sizing —
+    // this only raises the ceiling for the exchange.
+    ble_att_set_preferred_mtu(MAX_CHUNK_SIZE + 3);
+
     int rc = ble_gatts_count_cfg(nus_gatt_svcs);
     assert(rc == 0);
     rc = ble_gatts_add_svcs(nus_gatt_svcs);
@@ -694,6 +763,15 @@ void ble_nus_task(void *pvParameters)
                 char buf[32];
                 snprintf(buf, sizeof(buf), "CAN %lu\n", can_handler_frame_count());
                 nus_notify_str(buf);
+
+                // Report consumed speed frames every ~30s so it's visible on the
+                // monitor that SPD is arriving and being dropped before the queue.
+                static uint8_t spd_log_ctr = 0;
+                if (++spd_log_ctr >= 30) {
+                    ESP_LOGI(TAG, "SPD frames consumed: %lu (mtu=%u)",
+                             (unsigned long)s_spd_frames, negotiated_mtu);
+                    spd_log_ctr = 0;
+                }
             }
             // APP_MODE_WEB_INTERFACE: no periodic heartbeat — command/reply only
         }

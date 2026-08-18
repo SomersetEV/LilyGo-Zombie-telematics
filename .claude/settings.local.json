@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Read(//c/Users/benay/esp/v5.4.2/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\benay\\OneDrive\\Documents\\github\\Telematics-Phone-app\\lib\\services"
     ]
   }
 }
