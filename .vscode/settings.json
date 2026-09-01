@@ -1,5 +1,12 @@
 {
-    "idf.currentSetup": "C:\\Users\\benay\\esp\\v5.4.2\\esp-idf",
-    "idf.portWin": "COM13",
-    "idf.flashType": "UART"
+  "idf.currentSetup": "C:\\Users\\benay\\esp\\v5.4.2\\esp-idf",
+  "idf.portWin": "COM18",
+  "idf.flashType": "UART",
+  "idf.customExtraVars": {},
+  "clangd.path": "C:\\Users\\benay\\.espressif\\tools\\esp-clang\\esp-18.1.2_20240912\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\benay\\OneDrive\\Documents\\github\\LilyGo-Zombie-telematics\\build"
+  ]
 }
