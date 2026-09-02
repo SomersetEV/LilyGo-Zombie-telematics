@@ -105,7 +105,6 @@ static void sw_printf(sock_writer_t *w, const char *fmt, ...)
 #define SDO_CMD_SAVE          0
 #define SDO_CMD_RESET         2
 
-#define OI_CAN_TRANSCEIVER_STANDBY_PIN  GPIO_NUM_23
 #define PAGE_SIZE_BYTES  1024
 #define JSON_MOUNT_POINT "/spiffs"
 
@@ -122,9 +121,47 @@ static twai_node_handle_t s_node = NULL;
 static QueueHandle_t      s_rx_queue = NULL;
 static int                s_retries = 0;
 
+// Serialises SDO transactions. The source project ran every request from one
+// Arduino loop; the port has two concurrent callers — the oi_can_poll task and
+// the httpd task — both draining s_rx_queue, so the poll task silently ate the
+// replies the HTTP handlers were blocked on (in ST_IDLE handle_sdo_response
+// falls through its default case and drops the frame). Back to one outstanding
+// request at a time.
+static SemaphoreHandle_t  s_sdo_lock = NULL;
+// Tick of the last serial-number request, for the handshake retry in oi_can_loop().
+static TickType_t         s_serial_req_tick = 0;
+static int                s_serial_attempts = 0;
+
 // ── low-level TX/RX ──────────────────────────────────────────────────────────
 
 typedef struct { uint32_t id; uint8_t dlc; uint8_t data[8]; } oi_frame_t;
+
+#define SDO_RESPONSE_ID   (0x580u | s_node_id)
+#define BOOTLOADER_ID     0x7de
+
+// Did the last frame we put on the bus get acknowledged by anyone? On CAN a
+// frame is only ACKed if at least one other node received it cleanly, so this
+// separates "the inverter is there but not answering us" from "we are alone on
+// the wire". Counters, not a flag, so a stalled handshake shows its history.
+static volatile uint32_t s_tx_ok_count = 0;
+static volatile uint32_t s_tx_fail_count = 0;
+
+// Every frame the controller accepts, including ones not addressed to us. This
+// is the difference between "the bus is alive but the inverter won't answer"
+// and "we are not electrically connected to anything". Counted before the
+// SDO-relevance check below, so it reflects raw bus activity.
+static volatile uint32_t s_rx_any_count = 0;
+static volatile uint32_t s_rx_last_id = 0;
+
+static bool IRAM_ATTR oi_tx_done_cb(twai_node_handle_t handle,
+                                     const twai_tx_done_event_data_t *edata,
+                                     void *user_ctx)
+{
+    (void)handle; (void)user_ctx;
+    if (edata && edata->is_tx_success) s_tx_ok_count++;
+    else                               s_tx_fail_count++;
+    return false;
+}
 
 static bool IRAM_ATTR oi_rx_done_cb(twai_node_handle_t handle,
                                      const twai_rx_done_event_data_t *edata,
@@ -135,6 +172,15 @@ static bool IRAM_ATTR oi_rx_done_cb(twai_node_handle_t handle,
     twai_frame_t rx = { .buffer = buf, .buffer_len = sizeof(buf) };
 
     if (twai_node_receive_from_isr(handle, &rx) != ESP_OK) return false;
+
+    s_rx_any_count++;
+    s_rx_last_id = rx.header.id;
+
+    // Only SDO replies from our node and bootloader frames belong in this queue.
+    // Every twai_recv() below is a synchronous "next frame is my reply" read, so
+    // without this the inverter's normal periodic traffic is what those reads
+    // return. Backs up the hardware acceptance filter set in init.
+    if (rx.header.id != SDO_RESPONSE_ID && rx.header.id != BOOTLOADER_ID) return false;
 
     oi_frame_t f = {
         .id  = rx.header.id,
@@ -154,13 +200,68 @@ static void twai_send(uint32_t id, const uint8_t *data, uint8_t dlc)
     frame.header.dlc = dlc;
     frame.buffer      = (uint8_t *)data;
     frame.buffer_len  = dlc;
-    twai_node_transmit(s_node, &frame, 10);
+    // The result was previously discarded, which hid the difference between
+    // "the inverter isn't answering" and "we never got the frame onto the bus".
+    esp_err_t err = twai_node_transmit(s_node, &frame, 10);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "TX of 0x%lx failed: %s", (unsigned long)id, esp_err_to_name(err));
+    }
+}
+
+// One-line summary of what the CAN controller itself thinks is going on. An
+// unanswered request looks completely different depending on the cause:
+//   error-active, tx_err 0    -> frames are being ACKed; nobody is replying
+//                                (wrong node id, or the inverter isn't running)
+//   tx_err climbing / bus-off -> nothing is ACKing us at all
+//                                (wiring, termination, or wrong bitrate)
+static void log_bus_status(const char *context)
+{
+    static const char *state_name[] = { "error-active", "error-warning",
+                                        "error-passive", "BUS-OFF" };
+    twai_node_status_t st = {0};
+    twai_node_record_t rec = {0};
+    if (twai_node_get_info(s_node, &st, &rec) != ESP_OK) return;
+
+    ESP_LOGW(TAG, "%s: bus %s, tx_acked %lu, tx_unacked %lu, rx_frames %lu (last id 0x%lx), "
+                  "tx_err %u, rx_err %u, bus_err %lu",
+             context,
+             st.state < (sizeof(state_name) / sizeof(state_name[0]))
+                 ? state_name[st.state] : "?",
+             (unsigned long)s_tx_ok_count, (unsigned long)s_tx_fail_count,
+             (unsigned long)s_rx_any_count, (unsigned long)s_rx_last_id,
+             (unsigned)st.tx_error_count, (unsigned)st.rx_error_count,
+             (unsigned long)rec.bus_err_num);
+
+    // Bus-off is latched — without an explicit recover the node stays offline
+    // for good and every later request silently does nothing.
+    if (st.state == TWAI_ERROR_BUS_OFF) {
+        ESP_LOGW(TAG, "Node is bus-off, attempting recovery");
+        twai_node_recover(s_node);
+    }
 }
 
 // Blocking receive with timeout, mirroring the source's twai_receive(&f, pdMS_TO_TICKS(N)).
 static bool twai_recv(oi_frame_t *out, int timeout_ms)
 {
     return xQueueReceive(s_rx_queue, out, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+static bool sdo_lock(TickType_t wait)
+{
+    return s_sdo_lock && xSemaphoreTake(s_sdo_lock, wait) == pdTRUE;
+}
+
+static void sdo_unlock(void)
+{
+    if (s_sdo_lock) xSemaphoreGive(s_sdo_lock);
+}
+
+// Discard anything left over from a previous (timed-out) transaction so a stale
+// reply can't be mistaken for the answer to the next request.
+static void drain_rx_queue(void)
+{
+    oi_frame_t f;
+    while (s_rx_queue && xQueueReceive(s_rx_queue, &f, 0) == pdTRUE) { }
 }
 
 static void request_sdo_element(uint16_t index, uint8_t sub_index)
@@ -391,8 +492,23 @@ static void handle_update(const oi_frame_t *rx)
 // go through the same core-1 path.
 static esp_err_t oi_can_init_on_this_core(uint8_t node_id, oi_baud_t baud)
 {
-    gpio_set_direction(OI_CAN_TRANSCEIVER_STANDBY_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(OI_CAN_TRANSCEIVER_STANDBY_PIN, 0);
+    // Power and un-standby the transceiver. Driving SE low alone (as this did)
+    // leaves the boost rail off, so the ESP32 transmits into a dead
+    // transceiver: frames never reach the bus, nothing ACKs them, and TEC
+    // climbs by 8 per attempt while rx stays at zero.
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << CAN_5V_EN_PIN) | (1ULL << CAN_SE_PIN),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io));
+    gpio_set_level(CAN_5V_EN_PIN, 1);   // boost rail on
+    gpio_set_level(CAN_SE_PIN, 0);      // SE/Rs low = normal (high-speed) mode
+    vTaskDelay(pdMS_TO_TICKS(20));      // let the rail come up before we transmit
+    ESP_LOGI(TAG, "Transceiver enabled (5V_EN=GPIO%d high, SE=GPIO%d low)",
+             CAN_5V_EN_PIN, CAN_SE_PIN);
 
     if (s_node) {
         twai_node_disable(s_node);
@@ -425,14 +541,39 @@ static esp_err_t oi_can_init_on_this_core(uint8_t node_id, oi_baud_t baud)
         return err;
     }
 
-    twai_event_callbacks_t cbs = { .on_rx_done = oi_rx_done_cb };
+    // s_node_id gates the ISR's frame filter, so it must be live before enable().
+    s_node_id   = node_id;
+    s_baud_rate = baud;
+
+    // Accept every ID in hardware; oi_rx_done_cb decides in software what
+    // actually belongs in the SDO queue. A hardware filter here would save some
+    // ISR work on a busy bus, but it also makes "no traffic at all" and "plenty
+    // of traffic, none of it for us" look identical from the console — and that
+    // distinction is what any bring-up problem turns on. Must be configured
+    // while the node is still disabled.
+    twai_mask_filter_config_t filter = { .id = 0, .mask = 0 };
+    err = twai_node_config_mask_filter(s_node, 0, &filter);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Acceptance filter not applied: %s", esp_err_to_name(err));
+    }
+
+    twai_event_callbacks_t cbs = {
+        .on_rx_done = oi_rx_done_cb,
+        .on_tx_done = oi_tx_done_cb,
+    };
     twai_node_register_event_callbacks(s_node, &cbs, NULL);
     twai_node_enable(s_node);
 
-    s_node_id   = node_id;
-    s_baud_rate = baud;
-    s_state     = ST_OBTAINSERIAL;
+    s_state           = ST_OBTAINSERIAL;
+    s_serial_attempts = 0;
+    s_tx_ok_count     = 0;
+    s_tx_fail_count   = 0;
+    s_rx_any_count    = 0;
+    s_rx_last_id      = 0;
+    drain_rx_queue();
+
     request_sdo_element(SDO_INDEX_SERIAL, 0);
+    s_serial_req_tick = xTaskGetTickCount();
     ESP_LOGI(TAG, "CAN initialized (node %u, %lu bps, transmit-capable)",
              node_id, (unsigned long)bitrate);
     return ESP_OK;
@@ -455,26 +596,42 @@ static void oi_can_init_task(void *arg)
 
 esp_err_t oi_can_init(uint8_t node_id, oi_baud_t baud)
 {
+    if (!s_sdo_lock) {
+        s_sdo_lock = xSemaphoreCreateMutex();
+        if (!s_sdo_lock) return ESP_ERR_NO_MEM;
+    }
+    // A /nodeid change deletes and re-creates the node, so it must not land in
+    // the middle of another caller's SDO transaction.
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return ESP_ERR_TIMEOUT;
+
+    esp_err_t result;
     if (xPortGetCoreID() == 1) {
-        return oi_can_init_on_this_core(node_id, baud);
-    }
-    // Marshal onto a core-1 task (callers run on core 0: app_main at startup,
-    // httpd task on a /nodeid settings change).
-    init_req_t req = {
-        .node_id = node_id,
-        .baud    = baud,
-        .result  = ESP_FAIL,
-        .done    = xSemaphoreCreateBinary(),
-    };
-    if (!req.done) return ESP_ERR_NO_MEM;
-    if (xTaskCreatePinnedToCore(oi_can_init_task, "oi_can_init", 4096,
-                                &req, 10, NULL, 1) != pdPASS) {
+        result = oi_can_init_on_this_core(node_id, baud);
+    } else {
+        // Marshal onto a core-1 task (callers run on core 0: app_main at startup,
+        // httpd task on a /nodeid settings change).
+        init_req_t req = {
+            .node_id = node_id,
+            .baud    = baud,
+            .result  = ESP_FAIL,
+            .done    = xSemaphoreCreateBinary(),
+        };
+        if (!req.done) {
+            sdo_unlock();
+            return ESP_ERR_NO_MEM;
+        }
+        if (xTaskCreatePinnedToCore(oi_can_init_task, "oi_can_init", 4096,
+                                    &req, 10, NULL, 1) != pdPASS) {
+            vSemaphoreDelete(req.done);
+            sdo_unlock();
+            return ESP_ERR_NO_MEM;
+        }
+        xSemaphoreTake(req.done, portMAX_DELAY);
         vSemaphoreDelete(req.done);
-        return ESP_ERR_NO_MEM;
+        result = req.result;
     }
-    xSemaphoreTake(req.done, portMAX_DELAY);
-    vSemaphoreDelete(req.done);
-    return req.result;
+    sdo_unlock();
+    return result;
 }
 
 void oi_can_deinit(void)
@@ -486,35 +643,124 @@ void oi_can_deinit(void)
     }
 }
 
+// Probe every CANopen node id for an SDO server. Runs once, after the
+// configured node has stayed silent while the bus is otherwise healthy —
+// frames arriving and our transmissions being acknowledged means something is
+// out there, just not answering on the id we were told to use. With more than
+// one openinverter board on the bus this also says which is which, since the
+// acknowledgement that proves "someone is listening" carries no address.
+// Temporarily retargets s_node_id, which is what the RX callback filters on.
+static void scan_for_nodes(void)
+{
+    uint8_t saved = s_node_id;
+    int found = 0;
+
+    ESP_LOGW(TAG, "Bus is healthy but node %u is silent — scanning ids 1-63 for "
+                  "SDO servers...", saved);
+
+    for (uint8_t id = 1; id <= 63; id++) {
+        s_node_id = id;
+        drain_rx_queue();
+        request_sdo_element(SDO_INDEX_SERIAL, 0);
+
+        oi_frame_t rx;
+        if (twai_recv(&rx, 20) && rx.id == (0x580u | id) && rx.data[0] != SDO_ABORT) {
+            uint32_t serial_word;
+            memcpy(&serial_word, &rx.data[4], 4);
+            ESP_LOGW(TAG, "  --> node %u answered, serial word 0 = 0x%08lx",
+                     id, (unsigned long)serial_word);
+            found++;
+        }
+    }
+
+    s_node_id = saved;
+    drain_rx_queue();
+
+    if (found) {
+        ESP_LOGW(TAG, "Scan complete: %d node(s) answered. Set the Node ID field "
+                      "in the web UI to one of those. The serial numbers tell the "
+                      "boards apart if more than one replied.", found);
+    } else {
+        ESP_LOGW(TAG, "Scan complete: nothing answered on any id 1-63, though the "
+                      "bus is carrying traffic. Whatever is transmitting is not "
+                      "running an SDO server.");
+    }
+}
+
 void oi_can_loop(void)
 {
+    if (!s_node) return;
+    // Try-lock, never block: an HTTP handler owning the bus is the normal case,
+    // and this task runs again in 10ms anyway. Blocking here would put the poll
+    // task back to competing with the handler for the same replies.
+    if (!sdo_lock(0)) return;
+
     oi_frame_t rx;
     bool recvd_response = false;
 
     if (twai_recv(&rx, 0)) {
-        if (rx.id == (0x580 | s_node_id)) {
+        if (rx.id == SDO_RESPONSE_ID) {
             handle_sdo_response(&rx);
             recvd_response = true;
-        } else if (rx.id == 0x7de) {
+        } else if (rx.id == BOOTLOADER_ID) {
             handle_update(&rx);
         } else {
             ESP_LOGD(TAG, "Ignoring frame id=0x%lx", (unsigned long)rx.id);
         }
     }
 
-    if (s_upd_state == REQUEST_JSON) {
+    // The source project asks for the serial number exactly once, at init. If
+    // that frame is lost — or the inverter powers up after the ESP does — the
+    // state machine sticks at ST_OBTAINSERIAL and every /cmd?cmd=json 500s,
+    // which the UI renders as the ESP<->STM communication error bar, forever.
+    // ST_ERROR (an SDO abort) is equally terminal. Re-ask once a second instead.
+    if ((s_state == ST_OBTAINSERIAL || s_state == ST_ERROR) &&
+        (xTaskGetTickCount() - s_serial_req_tick) > pdMS_TO_TICKS(1000)) {
+        s_state = ST_OBTAINSERIAL;
+
+        // Say so out loud. A silent retry loop looks identical on the console
+        // to a firmware that has stopped trying, which is exactly the state
+        // this whole handshake fails into.
+        char context[64];
+        snprintf(context, sizeof(context), "No reply from node %u (attempt %d)",
+                 s_node_id, ++s_serial_attempts);
+        log_bus_status(context);
+
+        // Once, after a few silent attempts, find out whether anything on the
+        // bus does answer SDO — usually it does, on a different id.
+        static bool scanned = false;
+        if (!scanned && s_serial_attempts >= 5) {
+            scanned = true;
+            scan_for_nodes();
+        }
+
+        drain_rx_queue();
+        request_sdo_element(SDO_INDEX_SERIAL, 0);
+        s_serial_req_tick = xTaskGetTickCount();
+    }
+
+    bool pacing_delay = (s_upd_state == REQUEST_JSON);
+    if (pacing_delay) {
         s_retries--;
         if (recvd_response || s_retries < 0) {
             s_upd_state = UPD_IDLE;
         } else {
             request_sdo_element(SDO_INDEX_SERIAL, 0);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
+
+    sdo_unlock();
+    if (pacing_delay) vTaskDelay(pdMS_TO_TICKS(100));  // outside the lock
 }
 
 bool oi_can_send_json(int client_fd)
 {
+    if (!s_node) return false;
+
+    // The browser's first request races the serial-number/schema handshake
+    // kicked off at init. Wait it out rather than 500ing straight into the
+    // communication error bar on every page load.
+    for (int i = 0; i < 60 && s_state != ST_IDLE; i++) vTaskDelay(pdMS_TO_TICKS(50));
     if (s_state != ST_IDLE) return false;
 
     FILE *f = fopen(s_json_path, "r");
@@ -526,6 +772,9 @@ bool oi_can_send_json(int client_fd)
     size_t n = fread(buf, 1, (size_t)st.st_size, f);
     buf[n] = '\0';
     fclose(f);
+
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) { free(buf); return false; }
+    drain_rx_queue();
 
     sock_writer_t w;
     sw_init(&w, client_fd);
@@ -549,9 +798,17 @@ bool oi_can_send_json(int client_fd)
 
         if (has_id && (int)id_d > 0) {
             int id = (int)id_d;
-            request_sdo_element(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
+            uint16_t want_index = (uint16_t)(SDO_INDEX_PARAM_UID | (id >> 8));
+            request_sdo_element(want_index, id & 0xFF);
+
+            // Match index *and* sub-index: a reply that answers a different
+            // request is a lost transaction, not this parameter's value.
             oi_frame_t resp;
-            if (twai_recv(&resp, 10) && resp.data[3] == (uint8_t)(id & 0xFF)) {
+            bool answered = twai_recv(&resp, 10) &&
+                            (uint16_t)(resp.data[1] | (resp.data[2] << 8)) == want_index &&
+                            resp.data[3] == (uint8_t)(id & 0xFF);
+
+            if (answered && resp.data[0] != SDO_ABORT) {
                 int32_t raw;
                 memcpy(&raw, &resp.data[4], 4);
                 double value = raw / 32.0;
@@ -560,7 +817,10 @@ bool oi_can_send_json(int client_fd)
                 sw_printf(&w, "\"value\":%g,", value);
                 sw_write(&w, obj + 1, olen - 1);
             } else {
-                failed++;
+                // An abort means the inverter answered and simply won't serve
+                // this parameter — emit it without a value, but don't let it
+                // count towards the comm-failure budget below.
+                if (!answered) failed++;
                 sw_write(&w, obj, olen);
             }
         } else {
@@ -569,6 +829,7 @@ bool oi_can_send_json(int client_fd)
     }
     sw_putc(&w, '}');
     sw_flush(&w);
+    sdo_unlock();
     free(buf);
     return failed < 5;
 }
@@ -585,6 +846,17 @@ void oi_can_send_can_mapping(int client_fd)
 
     sock_writer_t w;
     sw_init(&w, client_fd);
+
+    // ui.js fires /canmap from the same page load as /cmd?cmd=json. Without the
+    // ST_IDLE guard this starts its own SDO walk on top of the serial/schema
+    // handshake and both fail; an empty map is the honest answer until we're up.
+    if (!s_node || s_state != ST_IDLE || !sdo_lock(pdMS_TO_TICKS(5000))) {
+        sw_write(&w, "[]", 2);
+        sw_flush(&w);
+        return;
+    }
+    drain_rx_queue();
+
     sw_putc(&w, '[');
     bool first = true;
 
@@ -664,6 +936,7 @@ void oi_can_send_can_mapping(int client_fd)
     }
     sw_putc(&w, ']');
     sw_flush(&w);
+    sdo_unlock();
 }
 
 void oi_can_delete_params(void)
@@ -693,22 +966,30 @@ oi_result_t oi_can_add_mapping(const char *json, size_t len)
     int index = b_isrx ? SDO_INDEX_MAP_RX : SDO_INDEX_MAP_TX;
     oi_frame_t rx;
 
-    set_value_sdo_u32(index, 0, (uint32_t)(int32_t)id);
-    if (!twai_recv(&rx, 10)) return OI_COMM_ERROR;
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return OI_COMM_ERROR;
+    drain_rx_queue();
 
-    uint32_t v1 = ((uint32_t)paramid & 0xFFFF) | (((uint32_t)position & 0xFF) << 16) |
-                  (((uint32_t)(int32_t)length & 0xFF) << 24);
-    set_value_sdo_u32(index, 1, v1);
-    if (rx.data[0] == SDO_ABORT || !twai_recv(&rx, 10)) return OI_COMM_ERROR;
+    oi_result_t result = OI_COMM_ERROR;
+    do {
+        set_value_sdo_u32(index, 0, (uint32_t)(int32_t)id);
+        if (!twai_recv(&rx, 10)) break;
 
-    uint32_t v2 = ((uint32_t)((int32_t)(gain * 1000)) & 0xFFFFFF) |
-                  (((uint32_t)(int32_t)offset & 0xFF) << 24);
-    set_value_sdo_u32(index, 2, v2);
-    if (rx.data[0] == SDO_ABORT || !twai_recv(&rx, 10)) return OI_COMM_ERROR;
+        uint32_t v1 = ((uint32_t)paramid & 0xFFFF) | (((uint32_t)position & 0xFF) << 16) |
+                      (((uint32_t)(int32_t)length & 0xFF) << 24);
+        set_value_sdo_u32(index, 1, v1);
+        if (rx.data[0] == SDO_ABORT || !twai_recv(&rx, 10)) break;
 
-    if (rx.data[0] != SDO_ABORT) return OI_OK;
-    ESP_LOGW(TAG, "Mapping failed");
-    return OI_COMM_ERROR;
+        uint32_t v2 = ((uint32_t)((int32_t)(gain * 1000)) & 0xFFFFFF) |
+                      (((uint32_t)(int32_t)offset & 0xFF) << 24);
+        set_value_sdo_u32(index, 2, v2);
+        if (rx.data[0] == SDO_ABORT || !twai_recv(&rx, 10)) break;
+
+        if (rx.data[0] != SDO_ABORT) result = OI_OK;
+        else ESP_LOGW(TAG, "Mapping failed");
+    } while (0);
+
+    sdo_unlock();
+    return result;
 }
 
 oi_result_t oi_can_remove_mapping(const char *json, size_t len)
@@ -722,13 +1003,17 @@ oi_result_t oi_can_remove_mapping(const char *json, size_t len)
         return OI_UNKNOWN_INDEX;
     }
 
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return OI_COMM_ERROR;
+    drain_rx_queue();
+
     set_value_sdo_u32((uint16_t)index_d, (uint8_t)subindex_d, 0);
     oi_frame_t rx;
+    oi_result_t result = OI_COMM_ERROR;
     if (twai_recv(&rx, 10)) {
-        if (rx.data[0] != SDO_ABORT) return OI_OK;
-        return OI_UNKNOWN_INDEX;
+        result = (rx.data[0] != SDO_ABORT) ? OI_OK : OI_UNKNOWN_INDEX;
     }
-    return OI_COMM_ERROR;
+    sdo_unlock();
+    return result;
 }
 
 oi_result_t oi_can_set_value(const char *name, double value)
@@ -737,10 +1022,15 @@ oi_result_t oi_can_set_value(const char *name, double value)
     int id = get_id_for_name(name);
     if (id < 0) return OI_UNKNOWN_INDEX;
 
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return OI_COMM_ERROR;
+    drain_rx_queue();
+
     set_value_sdo_double(SDO_INDEX_PARAM_UID | (id >> 8), (uint8_t)(id & 0xFF), value);
     oi_frame_t rx;
-    if (!twai_recv(&rx, 10)) return OI_COMM_ERROR;
+    bool answered = twai_recv(&rx, 10);
+    sdo_unlock();
 
+    if (!answered) return OI_COMM_ERROR;
     if (rx.data[0] == SDO_RESPONSE_DOWNLOAD) return OI_OK;
     uint32_t err;
     memcpy(&err, &rx.data[4], 4);
@@ -754,11 +1044,16 @@ double oi_can_get_value(const char *name)
     int id = get_id_for_name(name);
     if (id < 0) return 0;
 
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return 0;
+    drain_rx_queue();
+
     request_sdo_element(SDO_INDEX_PARAM_UID | (id >> 8), (uint8_t)(id & 0xFF));
     oi_frame_t rx;
-    if (!twai_recv(&rx, 10)) return 0;
-    if (rx.data[0] == 0x80) return 0;
-    uint32_t raw;
+    bool answered = twai_recv(&rx, 10);
+    sdo_unlock();
+
+    if (!answered || rx.data[0] == SDO_ABORT) return 0;
+    int32_t raw;
     memcpy(&raw, &rx.data[4], 4);
     return (double)raw / 32.0;
 }
@@ -766,9 +1061,14 @@ double oi_can_get_value(const char *name)
 bool oi_can_save_to_flash(void)
 {
     if (s_state != ST_IDLE) return false;
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return false;
+    drain_rx_queue();
+
     set_value_sdo_u32(SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0);
     oi_frame_t rx;
-    return twai_recv(&rx, 200);
+    bool ok = twai_recv(&rx, 200);
+    sdo_unlock();
+    return ok;
 }
 
 void oi_can_stream_values(int client_fd, const char *names, int samples)
@@ -797,7 +1097,10 @@ void oi_can_stream_values(int client_fd, const char *names, int samples)
     sock_writer_t w;
     sw_init(&w, client_fd);
 
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) return;
+
     for (int i = 0; i < samples; i++) {
+        drain_rx_queue();
         for (int item = 0; item < num_items; item++) {
             int id = ids[item];
             if (id < 0) continue;
@@ -808,11 +1111,15 @@ void oi_can_stream_values(int client_fd, const char *names, int samples)
         oi_frame_t rx;
         while (twai_recv(&rx, 10)) {
             if (item > 0) sw_putc(&w, ',');
-            if (rx.data[0] == 0x80) {
+            if (rx.data[0] == SDO_ABORT) {
                 sw_putc(&w, '0');
             } else {
+                // data[1] is the index low byte, i.e. id >> 8, and data[3] the
+                // sub-index, i.e. id & 0xFF — so this reconstructs the full id.
+                // Comparing it against `ids[item] & 0xFF` only ever matched for
+                // ids below 256; anything higher reported 0.
                 int received_item = (rx.data[1] << 8) + rx.data[3];
-                if (item < num_items && received_item == (ids[item] & 0xFF)) {
+                if (item < num_items && received_item == ids[item]) {
                     int32_t raw;
                     memcpy(&raw, &rx.data[4], 4);
                     sw_printf(&w, "%.2f", raw / 32.0);
@@ -825,12 +1132,16 @@ void oi_can_stream_values(int client_fd, const char *names, int samples)
         sw_write(&w, "\r\n", 2);
     }
     sw_flush(&w);
+    sdo_unlock();
 }
 
 int oi_can_start_update(const char *filename)
 {
     s_update_file = fopen(filename, "r");
-    set_value_sdo_u32(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1);
+    if (sdo_lock(pdMS_TO_TICKS(5000))) {
+        set_value_sdo_u32(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1);
+        sdo_unlock();
+    }
     s_upd_state = SEND_MAGIC;
     s_current_page = 0;
     if (!s_update_file) return 0;

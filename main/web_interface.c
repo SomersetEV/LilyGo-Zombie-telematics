@@ -541,9 +541,6 @@ esp_err_t web_interface_start(void)
 
     init_mdns();
 
-    err = start_http_server();
-    if (err != ESP_OK) return err;
-
     uint8_t node_id = DEFAULT_NODE_ID;
     uint8_t baud    = DEFAULT_CAN_BAUD;
     nvs_handle_t nvs;
@@ -555,7 +552,13 @@ esp_err_t web_interface_start(void)
     if (node_id < 1 || node_id > 63)  node_id = DEFAULT_NODE_ID;
     if (baud > OI_BAUD_500K)          baud    = DEFAULT_CAN_BAUD;
 
+    // Before the server starts accepting: a request that lands while the CAN
+    // node is still NULL can't do anything but fail, and the UI turns any such
+    // failure into the ESP<->STM communication error bar.
     oi_can_init(node_id, (oi_baud_t)baud);
+
+    err = start_http_server();
+    if (err != ESP_OK) return err;
 
     return ESP_OK;
 }
