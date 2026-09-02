@@ -37,25 +37,37 @@
 
 static const char *TAG = "OICAN";
 
-// ── buffered raw-socket writer ───────────────────────────────────────────────
-// httpd_req_to_sockfd() hands back the underlying LWIP socket fd, not
-// something fdopen()/dup() can wrap portably under IDF's VFS config — so
-// response bodies (JSON, CAN mapping, streamed samples) are written straight
-// to the fd via send(), buffered here to keep the many small fprintf-style
-// writes in the ported code from becoming one syscall each.
+// ── buffered response writer ─────────────────────────────────────────────────
+// Response bodies (JSON, CAN mapping, streamed samples) are emitted as httpd
+// chunks, buffered here so the many small fprintf-style writes in the ported
+// code don't become one chunk each.
+//
+// An earlier version of this port wrote straight to the socket fd from
+// httpd_req_to_sockfd(). That skipped the HTTP status line and headers
+// entirely — httpd_resp_set_type() only records the type for a later
+// httpd_resp_send*() call — so every successful response went out as a bare
+// body the browser threw away, while only the error path (which does go
+// through httpd_resp_send_err) was ever well formed.
 typedef struct {
-    int    fd;
-    char   buf[512];
-    size_t len;
+    httpd_req_t *req;
+    char         buf[512];
+    size_t       len;
 } sock_writer_t;
 
-static void sw_init(sock_writer_t *w, int fd) { w->fd = fd; w->len = 0; }
+static void sw_init(sock_writer_t *w, httpd_req_t *req) { w->req = req; w->len = 0; }
 
 static void sw_flush(sock_writer_t *w)
 {
     if (w->len == 0) return;
-    send(w->fd, w->buf, w->len, 0);
+    httpd_resp_send_chunk(w->req, w->buf, w->len);
     w->len = 0;
+}
+
+// Flush and close the chunked response. Every body-producing path must end here.
+static void sw_finish(sock_writer_t *w)
+{
+    sw_flush(w);
+    httpd_resp_send_chunk(w->req, NULL, 0);
 }
 
 static void sw_write(sock_writer_t *w, const char *data, size_t n)
@@ -107,6 +119,15 @@ static void sw_printf(sock_writer_t *w, const char *fmt, ...)
 
 #define PAGE_SIZE_BYTES  1024
 #define JSON_MOUNT_POINT "/spiffs"
+
+// The schema is downloaded here and renamed onto its real name only once the
+// final segment arrives. Writing straight to the real name meant any
+// interruption — a reset, a /nodeid re-init, an SDO abort mid-transfer — left a
+// truncated file that every later boot accepted as "already downloaded" and
+// then failed to parse, permanently.
+#define JSON_TMP_PATH    JSON_MOUNT_POINT "/schema.tmp"
+// Smallest plausible schema. Anything shorter is a leftover stub, not a schema.
+#define JSON_MIN_BYTES   64
 
 typedef enum { ST_IDLE, ST_ERROR, ST_OBTAINSERIAL, ST_OBTAIN_JSON } sdo_state_t;
 typedef enum { UPD_IDLE, SEND_MAGIC, SEND_SIZE, SEND_PAGE, CHECK_CRC, REQUEST_JSON } upd_state_t;
@@ -270,6 +291,29 @@ static void request_sdo_element(uint16_t index, uint8_t sub_index)
     twai_send(0x600 | s_node_id, d, 8);
 }
 
+// Wait for the reply to one specific index/sub-index, discarding answers to
+// earlier requests along the way.
+//
+// This matters when reading a few hundred parameters back to back. The inverter
+// services CAN at its lowest interrupt priority, so under load the odd reply
+// arrives after our timeout. Taking "the next frame" as the answer then shifts
+// every subsequent read by one and the whole run fails from that point on —
+// which is what "24 parameter reads unanswered" was: one late reply, then a
+// cascade. Skipping stale replies re-synchronises instead.
+static bool await_sdo_reply(uint16_t index, uint8_t sub_index, oi_frame_t *out,
+                            int timeout_ms)
+{
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    do {
+        if (!twai_recv(out, 5)) continue;
+        if ((uint16_t)(out->data[1] | (out->data[2] << 8)) == index &&
+            out->data[3] == sub_index) {
+            return true;
+        }
+    } while ((int32_t)(deadline - xTaskGetTickCount()) > 0);
+    return false;
+}
+
 static void set_value_sdo_u32(uint16_t index, uint8_t sub_index, uint32_t value)
 {
     uint8_t d[8] = { SDO_WRITE, (uint8_t)(index & 0xFF), (uint8_t)(index >> 8), sub_index, 0, 0, 0, 0 };
@@ -354,13 +398,15 @@ static void handle_sdo_response(const oi_frame_t *rx)
                          (unsigned long)s_serial[2], (unsigned long)s_serial[3]);
 
                 struct stat st;
-                if (stat(s_json_path, &st) == 0) {
+                if (stat(s_json_path, &st) == 0 && st.st_size >= JSON_MIN_BYTES) {
                     s_state = ST_IDLE;
-                    ESP_LOGI(TAG, "JSON schema already downloaded");
+                    ESP_LOGI(TAG, "JSON schema already downloaded (%ld bytes)",
+                             (long)st.st_size);
                 } else {
                     s_state = ST_OBTAIN_JSON;
-                    ESP_LOGI(TAG, "Downloading schema to %s", s_json_path);
-                    file = fopen(s_json_path, "w");
+                    ESP_LOGI(TAG, "Downloading schema for %s", s_json_path);
+                    unlink(JSON_TMP_PATH);
+                    file = fopen(JSON_TMP_PATH, "w");
                     toggle_bit = false;
                     request_sdo_element(SDO_INDEX_STRINGS, 0);
                 }
@@ -376,7 +422,16 @@ static void handle_sdo_response(const oi_frame_t *rx)
             fclose(file);
             file = NULL;
             s_state = ST_IDLE;
-            ESP_LOGI(TAG, "Schema download complete");
+            // Only now does it get its real name, so a partial transfer can
+            // never be mistaken for a cached schema.
+            unlink(s_json_path);
+            if (rename(JSON_TMP_PATH, s_json_path) != 0) {
+                ESP_LOGE(TAG, "Could not move schema into place");
+            } else {
+                struct stat st;
+                stat(s_json_path, &st);
+                ESP_LOGI(TAG, "Schema download complete (%ld bytes)", (long)st.st_size);
+            }
         } else if (rx->data[0] == (uint8_t)(toggle_bit << 4) && (rx->data[0] & SDO_READ) == 0) {
             fwrite(&rx->data[1], 1, 7, file);
             toggle_bit = !toggle_bit;
@@ -753,7 +808,7 @@ void oi_can_loop(void)
     if (pacing_delay) vTaskDelay(pdMS_TO_TICKS(100));  // outside the lock
 }
 
-bool oi_can_send_json(int client_fd)
+bool oi_can_send_json(httpd_req_t *req)
 {
     if (!s_node) return false;
 
@@ -761,10 +816,16 @@ bool oi_can_send_json(int client_fd)
     // kicked off at init. Wait it out rather than 500ing straight into the
     // communication error bar on every page load.
     for (int i = 0; i < 60 && s_state != ST_IDLE; i++) vTaskDelay(pdMS_TO_TICKS(50));
-    if (s_state != ST_IDLE) return false;
+    if (s_state != ST_IDLE) {
+        ESP_LOGW(TAG, "json: link not ready (state %d)", (int)s_state);
+        return false;
+    }
 
     FILE *f = fopen(s_json_path, "r");
-    if (!f) return false;
+    if (!f) {
+        ESP_LOGW(TAG, "json: cannot open cached schema %s", s_json_path);
+        return false;
+    }
     struct stat st;
     fstat(fileno(f), &st);
     char *buf = malloc((size_t)st.st_size + 1);
@@ -777,7 +838,7 @@ bool oi_can_send_json(int client_fd)
     drain_rx_queue();
 
     sock_writer_t w;
-    sw_init(&w, client_fd);
+    sw_init(&w, req);
 
     int failed = 0;
     sw_putc(&w, '{');
@@ -801,12 +862,16 @@ bool oi_can_send_json(int client_fd)
             uint16_t want_index = (uint16_t)(SDO_INDEX_PARAM_UID | (id >> 8));
             request_sdo_element(want_index, id & 0xFF);
 
-            // Match index *and* sub-index: a reply that answers a different
-            // request is a lost transaction, not this parameter's value.
             oi_frame_t resp;
-            bool answered = twai_recv(&resp, 10) &&
-                            (uint16_t)(resp.data[1] | (resp.data[2] << 8)) == want_index &&
-                            resp.data[3] == (uint8_t)(id & 0xFF);
+            bool answered = await_sdo_reply(want_index, (uint8_t)(id & 0xFF), &resp, 25);
+            if (!answered) {
+                // A reply lost to a busy inverter would otherwise leave this
+                // parameter with no value, showing as a blank field that comes
+                // and goes between refreshes. Ask once more before giving up —
+                // it only costs anything on the rare miss.
+                request_sdo_element(want_index, id & 0xFF);
+                answered = await_sdo_reply(want_index, (uint8_t)(id & 0xFF), &resp, 40);
+            }
 
             if (answered && resp.data[0] != SDO_ABORT) {
                 int32_t raw;
@@ -828,13 +893,23 @@ bool oi_can_send_json(int client_fd)
         }
     }
     sw_putc(&w, '}');
-    sw_flush(&w);
+    sw_finish(&w);
     sdo_unlock();
     free(buf);
-    return failed < 5;
+
+    if (failed > 0) {
+        // Report but don't act: an unanswered read means a slow or busy
+        // inverter, not a bad schema. Deleting the cached schema here (as an
+        // earlier version did) throws away a good file and forces a 16-second
+        // re-download during which every request fails.
+        ESP_LOGW(TAG, "json: %d parameter read(s) unanswered", failed);
+    }
+    // The body is already on the wire, so the caller can no longer substitute
+    // an error response — those are decided by the pre-send checks above.
+    return true;
 }
 
-void oi_can_send_can_mapping(int client_fd)
+void oi_can_send_can_mapping(httpd_req_t *req)
 {
     enum { REQ_START, REQ_COBID, REQ_DATAPOSLEN, REQ_GAINOFS, REQ_DONE };
 
@@ -845,14 +920,14 @@ void oi_can_send_can_mapping(int client_fd)
     int req_state = REQ_START;
 
     sock_writer_t w;
-    sw_init(&w, client_fd);
+    sw_init(&w, req);
 
     // ui.js fires /canmap from the same page load as /cmd?cmd=json. Without the
     // ST_IDLE guard this starts its own SDO walk on top of the serial/schema
     // handshake and both fail; an empty map is the honest answer until we're up.
     if (!s_node || s_state != ST_IDLE || !sdo_lock(pdMS_TO_TICKS(5000))) {
         sw_write(&w, "[]", 2);
-        sw_flush(&w);
+        sw_finish(&w);
         return;
     }
     drain_rx_queue();
@@ -935,7 +1010,7 @@ void oi_can_send_can_mapping(int client_fd)
         }
     }
     sw_putc(&w, ']');
-    sw_flush(&w);
+    sw_finish(&w);
     sdo_unlock();
 }
 
@@ -1071,9 +1146,12 @@ bool oi_can_save_to_flash(void)
     return ok;
 }
 
-void oi_can_stream_values(int client_fd, const char *names, int samples)
+void oi_can_stream_values(httpd_req_t *req, const char *names, int samples)
 {
-    if (s_state != ST_IDLE) return;
+    if (s_state != ST_IDLE) {
+        httpd_resp_send(req, "", 0);
+        return;
+    }
 
     int ids[30];
     int num_items = 0;
@@ -1095,9 +1173,12 @@ void oi_can_stream_values(int client_fd, const char *names, int samples)
     }
 
     sock_writer_t w;
-    sw_init(&w, client_fd);
+    sw_init(&w, req);
 
-    if (!sdo_lock(pdMS_TO_TICKS(5000))) return;
+    if (!sdo_lock(pdMS_TO_TICKS(5000))) {
+        httpd_resp_send(req, "", 0);
+        return;
+    }
 
     for (int i = 0; i < samples; i++) {
         drain_rx_queue();
@@ -1131,7 +1212,7 @@ void oi_can_stream_values(int client_fd, const char *names, int samples)
         }
         sw_write(&w, "\r\n", 2);
     }
-    sw_flush(&w);
+    sw_finish(&w);
     sdo_unlock();
 }
 

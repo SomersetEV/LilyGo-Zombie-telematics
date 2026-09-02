@@ -5,7 +5,9 @@
       "Read(//c/Users/benay/esp/v5.4.2/**)",
       "Bash(grep -rn -i \"loopback\\\\|self_test\\\\|SELF_TEST\" /c/esp/v6.0.1/esp-idf/components/esp_hal_twai/*.c /c/esp/v6.0.1/esp-idf/components/esp_hal_twai/include/hal/twai_ll.h 2>/dev/null | head -25)",
       "Read(//c/esp/v6.0.1/esp-idf/components/esp_hal_twai/**)",
-      "PowerShell($idf = \"$env:USERPROFILE\\\\esp\\\\v6.0.1\\\\esp-idf\\\\export.ps1\"; if \\(Test-Path $idf\\) { \"FOUND: $idf\" } else { \"not at $idf\" }; Get-ChildItem -Path \"$env:USERPROFILE\\\\esp\",\"C:\\\\Espressif\",\"$env:USERPROFILE\\\\.espressif\" -Filter \"export.ps1\" -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 5 FullName)"
+      "PowerShell($idf = \"$env:USERPROFILE\\\\esp\\\\v6.0.1\\\\esp-idf\\\\export.ps1\"; if \\(Test-Path $idf\\) { \"FOUND: $idf\" } else { \"not at $idf\" }; Get-ChildItem -Path \"$env:USERPROFILE\\\\esp\",\"C:\\\\Espressif\",\"$env:USERPROFILE\\\\.espressif\" -Filter \"export.ps1\" -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 5 FullName)",
+      "Bash(cd \"/c/Users/benay/OneDrive/Documents/github/ccs32clara\" && grep -rn -i \"can\" src/hwinit.cpp | head -30; echo \"=== hwdefs CAN\"; grep -rn -i \"can\" include/hwdefs.h | head -20)",
+      "Read(//c/Users/benay/OneDrive/Documents/github/ccs32clara/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\benay\\OneDrive\\Documents\\github\\Telematics-Phone-app\\lib\\services"

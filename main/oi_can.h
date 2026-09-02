@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "esp_http_server.h"
 
 typedef enum {
     OI_OK,
@@ -27,9 +28,11 @@ void        oi_can_deinit(void);
 void        oi_can_loop(void);   // call periodically from the web_interface task
 
 // Parameter schema JSON (as downloaded from the inverter) with live values
-// filled in, written to the given fd. Returns false on CAN comm failure.
-bool        oi_can_send_json(int client_fd);
-void        oi_can_send_can_mapping(int client_fd);
+// filled in, sent as the response body. Returns false — without having sent
+// anything — if the link is not ready, so the caller can still send an error.
+// Once it starts writing the body it always completes it and returns true.
+bool        oi_can_send_json(httpd_req_t *req);
+void        oi_can_send_can_mapping(httpd_req_t *req);
 void        oi_can_delete_params(void);
 
 oi_result_t oi_can_add_mapping(const char *json, size_t len);
@@ -40,8 +43,8 @@ bool        oi_can_save_to_flash(void);
 
 // Comma-led list of names, e.g. ",udc,il1,speed" — matches the source
 // project's wire format where the leading comma is part of the request.
-// Writes `samples` rows of CSV values to the given fd.
-void        oi_can_stream_values(int client_fd, const char *names, int samples);
+// Sends `samples` rows of CSV values as the response body.
+void        oi_can_stream_values(httpd_req_t *req, const char *names, int samples);
 
 int         oi_can_start_update(const char *filename);
 int         oi_can_get_current_update_page(void);

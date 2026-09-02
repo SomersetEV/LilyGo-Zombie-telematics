@@ -281,11 +281,11 @@ static esp_err_t cmd_get_handler(httpd_req_t *req)
 
     if (strcmp(cmd, "json") == 0) {
         httpd_resp_set_type(req, "application/json");
-        int fd = httpd_req_to_sockfd(req);
-        if (fd < 0 || !oi_can_send_json(fd)) {
+        if (!oi_can_send_json(req)) {
+            // Only ever false before any body has been written, so substituting
+            // an error response here is safe.
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "CAN communication error");
         }
-        // oi_can_send_json wrote directly to the socket fd; nothing more to send.
         return ESP_OK;
     }
     if (strncmp(cmd, "set ", 4) == 0) {
@@ -311,8 +311,7 @@ static esp_err_t cmd_get_handler(httpd_req_t *req)
             return ESP_OK;
         }
         httpd_resp_set_type(req, "text/plain");
-        int fd = httpd_req_to_sockfd(req);
-        if (fd >= 0) oi_can_stream_values(fd, names, samples);
+        oi_can_stream_values(req, names, samples);
         return ESP_OK;
     }
     if (strcmp(cmd, "save") == 0) {
@@ -342,8 +341,7 @@ static esp_err_t canmap_get_handler(httpd_req_t *req)
 
     if (res == OI_OK) {
         httpd_resp_set_type(req, "application/json");
-        int fd = httpd_req_to_sockfd(req);
-        if (fd >= 0) oi_can_send_can_mapping(fd);
+        oi_can_send_can_mapping(req);
     } else if (res == OI_COMM_ERROR) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "CAN communication error");
     } else {
